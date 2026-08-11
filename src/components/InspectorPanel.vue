@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import DataSourcePanel from './DataSourcePanel.vue'
 import HistoryPanel from './HistoryPanel.vue'
 import LayerPanel from './LayerPanel.vue'
@@ -13,6 +13,7 @@ import {
   interactionActionOptions,
   styleFields
 } from '../editor/inspectorSchemas'
+import { createInteractionAction, getInteractionActions } from '../editor/project'
 
 const props = defineProps({
   page: {
@@ -91,14 +92,39 @@ defineEmits([
   'align-selected',
   'distribute-selected',
   'create-source',
+  'copy-all-sources-config',
+  'clear-all-source-runtime',
   'delete-source',
+  'duplicate-source',
+  'export-source',
+  'import-source',
+  'import-source-as-new',
+  'copy-source-runtime-payload',
   'refresh-source',
   'refresh-all-sources',
   'change-source-type',
   'update-source-payload',
+  'copy-source-debug',
+  'clear-source-runtime',
   'undo',
   'redo'
 ])
+
+const activeInteractionIndex = ref(0)
+const interactionActionLabelMap = Object.fromEntries(
+  interactionActionOptions.map((option) => [option.value, option.label])
+)
+const widgetTargetActionTypes = [
+  'highlight-widgets',
+  'show-widgets',
+  'hide-widgets',
+  'toggle-widgets-visibility'
+]
+const visibilityTargetActionTypes = [
+  'show-widgets',
+  'hide-widgets',
+  'toggle-widgets-visibility'
+]
 
 const commonGroupId = computed(() => {
   if (props.selectedWidgets.length < 2) {
@@ -127,11 +153,10 @@ const compatibleSources = computed(() => {
 })
 
 const currentBoundSource = computed(() => {
-  if (!props.selectedWidget?.dataBinding?.sourceId) {
-    return null
-  }
-
-  return props.project.dataSources.find((source) => source.id === props.selectedWidget.dataBinding.sourceId) ?? null
+  const sourceId = props.selectedWidget?.dataBinding?.sourceId
+  return sourceId
+    ? props.project.dataSources.find((source) => source.id === sourceId) ?? null
+    : null
 })
 
 const currentBoundRuntime = computed(() => {
@@ -165,38 +190,14 @@ const panelTitle = computed(() => {
 
 const panelDescription = computed(() => {
   if (props.selectedWidgets.length > 1) {
-    return '批量查看选区尺寸、组件数量和编组状态，并快速执行批量操作。'
+    return '查看当前多选结果的规模、尺寸、编组状态，并快速执行批量排版操作。'
   }
 
   if (props.selectedWidget) {
-    return '通过可折叠分组和独立 schema 配置管理组件基础属性、样式、数据和联动。'
+    return '集中管理组件基础属性、样式、数据绑定和事件编排。'
   }
 
-  return '未选中组件时，在这里配置页面尺寸、背景样式和全局画布参数。'
-})
-
-const clickAction = computed({
-  get: () => props.selectedWidget?.interaction?.clickAction ?? 'none',
-  set: (value) => {
-    if (!props.selectedWidget) {
-      return
-    }
-
-    ensureInteraction()
-    props.selectedWidget.interaction.clickAction = value
-  }
-})
-
-const targetPageId = computed({
-  get: () => props.selectedWidget?.interaction?.targetPageId ?? '',
-  set: (value) => {
-    if (!props.selectedWidget) {
-      return
-    }
-
-    ensureInteraction()
-    props.selectedWidget.interaction.targetPageId = value
-  }
+  return '未选中组件时，在这里配置页面尺寸、背景和全局画布参数。'
 })
 
 const barCategories = computed({
@@ -267,21 +268,51 @@ const widgetFields = computed(() =>
 )
 
 const widgetSectionTitle = computed(() => getWidgetSectionTitle(props.selectedWidget?.type))
+const interactionActions = computed(() => props.selectedWidget?.interaction?.actions ?? [])
+const selectedInteractionAction = computed(
+  () => interactionActions.value[activeInteractionIndex.value] ?? null
+)
 
 function ensureInteraction() {
   if (!props.selectedWidget) {
     return
   }
 
-  if (!props.selectedWidget.interaction) {
+  if (!props.selectedWidget.interaction || typeof props.selectedWidget.interaction !== 'object') {
     props.selectedWidget.interaction = {
-      clickAction: 'none',
-      targetWidgetIds: [],
-      targetSourceIds: [],
-      targetPageId: ''
+      actions: []
     }
+    return
+  }
+
+  if (!Array.isArray(props.selectedWidget.interaction.actions)) {
+    props.selectedWidget.interaction.actions = getInteractionActions(props.selectedWidget.interaction)
   }
 }
+
+watch(
+  () => props.selectedWidget?.id ?? '',
+  () => {
+    activeInteractionIndex.value = 0
+    ensureInteraction()
+  },
+  { immediate: true }
+)
+
+watch(
+  interactionActions,
+  (actions) => {
+    if (!actions.length) {
+      activeInteractionIndex.value = 0
+      return
+    }
+
+    if (activeInteractionIndex.value > actions.length - 1) {
+      activeInteractionIndex.value = actions.length - 1
+    }
+  },
+  { deep: true }
+)
 
 function toNumberList(value) {
   return value
@@ -305,13 +336,120 @@ function formatTime(timestamp) {
   }).format(new Date(timestamp))
 }
 
-function toggleTargetWidget(widgetId) {
+function addInteractionAction() {
   if (!props.selectedWidget) {
     return
   }
 
   ensureInteraction()
-  const selected = new Set(props.selectedWidget.interaction.targetWidgetIds ?? [])
+  props.selectedWidget.interaction.actions.push(createInteractionAction())
+  activeInteractionIndex.value = props.selectedWidget.interaction.actions.length - 1
+}
+
+function removeInteractionAction(index) {
+  if (!props.selectedWidget) {
+    return
+  }
+
+  ensureInteraction()
+  props.selectedWidget.interaction.actions.splice(index, 1)
+
+  if (activeInteractionIndex.value > index) {
+    activeInteractionIndex.value -= 1
+  }
+}
+
+function moveInteractionAction(index, delta) {
+  if (!props.selectedWidget) {
+    return
+  }
+
+  ensureInteraction()
+  const nextIndex = index + delta
+
+  if (nextIndex < 0 || nextIndex >= props.selectedWidget.interaction.actions.length) {
+    return
+  }
+
+  const actions = props.selectedWidget.interaction.actions
+  const [action] = actions.splice(index, 1)
+  actions.splice(nextIndex, 0, action)
+  activeInteractionIndex.value = nextIndex
+}
+
+function updateInteractionActionType(action, value) {
+  action.action = value
+
+  if (!widgetTargetActionTypes.includes(value)) {
+    action.targetWidgetIds = []
+  }
+
+  if (value !== 'refresh-sources') {
+    action.targetSourceIds = []
+  }
+
+  if (value !== 'switch-page') {
+    action.targetPageId = ''
+  }
+}
+
+function updateInteractionActionDelay(action, value) {
+  action.delay = Math.max(0, Number(value) || 0)
+}
+
+function getInteractionActionLabel(actionType) {
+  return interactionActionLabelMap[actionType] ?? '未配置动作'
+}
+
+function usesWidgetTargets(actionType) {
+  return widgetTargetActionTypes.includes(actionType)
+}
+
+function usesVisibilityTargets(actionType) {
+  return visibilityTargetActionTypes.includes(actionType)
+}
+
+function getTargetWidgets(actionType) {
+  return usesVisibilityTargets(actionType) ? props.project.widgets : otherWidgets.value
+}
+
+function getTargetWidgetEmptyText(actionType) {
+  return usesVisibilityTargets(actionType)
+    ? '当前页面还没有可配置显隐的组件。'
+    : '当前页面没有可联动的其他组件。'
+}
+
+function getInteractionActionSummary(action) {
+  switch (action.action) {
+    case 'highlight-widgets':
+      return action.targetWidgetIds?.length ? `高亮 ${action.targetWidgetIds.length} 个组件` : '未选择目标组件'
+    case 'show-widgets':
+      return action.targetWidgetIds?.length ? `显示 ${action.targetWidgetIds.length} 个组件` : '未选择目标组件'
+    case 'hide-widgets':
+      return action.targetWidgetIds?.length ? `隐藏 ${action.targetWidgetIds.length} 个组件` : '未选择目标组件'
+    case 'toggle-widgets-visibility':
+      return action.targetWidgetIds?.length ? `切换 ${action.targetWidgetIds.length} 个组件显隐` : '未选择目标组件'
+    case 'refresh-sources':
+      return action.targetSourceIds?.length ? `${action.targetSourceIds.length} 个数据源` : '未选择目标数据源'
+    case 'switch-page':
+      return action.targetPageId
+        ? props.pages.find((page) => page.id === action.targetPageId)?.name ?? '已选择目标页面'
+        : '未选择目标页面'
+    default:
+      return '请选择动作类型'
+  }
+}
+
+function getInteractionDelayLabel(action) {
+  return action.delay > 0 ? `延时 ${action.delay} ms` : '立即执行'
+}
+
+function toggleTargetWidget(widgetId, action = selectedInteractionAction.value) {
+  if (!action) {
+    return
+  }
+
+  const selected = new Set(action.targetWidgetIds ?? [])
 
   if (selected.has(widgetId)) {
     selected.delete(widgetId)
@@ -319,16 +457,15 @@ function toggleTargetWidget(widgetId) {
     selected.add(widgetId)
   }
 
-  props.selectedWidget.interaction.targetWidgetIds = Array.from(selected)
+  action.targetWidgetIds = Array.from(selected)
 }
 
-function toggleTargetSource(sourceId) {
-  if (!props.selectedWidget) {
+function toggleTargetSource(sourceId, action = selectedInteractionAction.value) {
+  if (!action) {
     return
   }
 
-  ensureInteraction()
-  const selected = new Set(props.selectedWidget.interaction.targetSourceIds ?? [])
+  const selected = new Set(action.targetSourceIds ?? [])
 
   if (selected.has(sourceId)) {
     selected.delete(sourceId)
@@ -336,15 +473,15 @@ function toggleTargetSource(sourceId) {
     selected.add(sourceId)
   }
 
-  props.selectedWidget.interaction.targetSourceIds = Array.from(selected)
+  action.targetSourceIds = Array.from(selected)
 }
 
-function isTargetWidgetSelected(widgetId) {
-  return Boolean(props.selectedWidget?.interaction?.targetWidgetIds?.includes(widgetId))
+function isTargetWidgetSelected(widgetId, action = selectedInteractionAction.value) {
+  return Boolean(action?.targetWidgetIds?.includes(widgetId))
 }
 
-function isTargetSourceSelected(sourceId) {
-  return Boolean(props.selectedWidget?.interaction?.targetSourceIds?.includes(sourceId))
+function isTargetSourceSelected(sourceId, action = selectedInteractionAction.value) {
+  return Boolean(action?.targetSourceIds?.includes(sourceId))
 }
 </script>
 
@@ -384,7 +521,7 @@ function isTargetSourceSelected(sourceId) {
 
       <InspectorSection
         title="批量操作"
-        caption="对当前选区统一执行显隐和锁定控制。"
+        caption="统一控制当前选区的显示与锁定状态。"
         storage-key="panel-multi-actions"
       >
         <div class="inspector-action-grid">
@@ -397,17 +534,13 @@ function isTargetSourceSelected(sourceId) {
 
       <InspectorSection
         title="排版操作"
-        caption="针对未锁定且可见的组件执行对齐和分布。"
+        caption="对未锁定且可见的组件执行对齐与分布。"
         storage-key="panel-multi-layout"
       >
         <p class="inspector-tip">当前可参与排版的组件：{{ editableSelectedCount }} 个</p>
 
         <div class="inspector-action-grid inspector-action-grid--wide">
-          <button
-            class="ghost"
-            :disabled="editableSelectedCount < 2"
-            @click="$emit('align-selected', 'left')"
-          >
+          <button class="ghost" :disabled="editableSelectedCount < 2" @click="$emit('align-selected', 'left')">
             左对齐
           </button>
           <button
@@ -417,18 +550,10 @@ function isTargetSourceSelected(sourceId) {
           >
             水平居中
           </button>
-          <button
-            class="ghost"
-            :disabled="editableSelectedCount < 2"
-            @click="$emit('align-selected', 'right')"
-          >
+          <button class="ghost" :disabled="editableSelectedCount < 2" @click="$emit('align-selected', 'right')">
             右对齐
           </button>
-          <button
-            class="ghost"
-            :disabled="editableSelectedCount < 2"
-            @click="$emit('align-selected', 'top')"
-          >
+          <button class="ghost" :disabled="editableSelectedCount < 2" @click="$emit('align-selected', 'top')">
             顶部对齐
           </button>
           <button
@@ -438,11 +563,7 @@ function isTargetSourceSelected(sourceId) {
           >
             垂直居中
           </button>
-          <button
-            class="ghost"
-            :disabled="editableSelectedCount < 2"
-            @click="$emit('align-selected', 'bottom')"
-          >
+          <button class="ghost" :disabled="editableSelectedCount < 2" @click="$emit('align-selected', 'bottom')">
             底部对齐
           </button>
           <button
@@ -468,8 +589,8 @@ function isTargetSourceSelected(sourceId) {
         storage-key="panel-multi-tips"
       >
         <p class="inspector-tip">
-          可以使用 Ctrl/Cmd 点选追加组件，拖动画布空白区域进行框选，Ctrl/Cmd + G 编组，Shift +
-          Ctrl/Cmd + G 取消编组，Ctrl/Cmd + C 复制，Ctrl/Cmd + V 粘贴，Ctrl/Cmd + A 全选。
+          可使用 Ctrl/Cmd 点选追加组件，拖动画布空白区域进行框选，Ctrl/Cmd + G 编组，Shift + Ctrl/Cmd + G
+          解组，Ctrl/Cmd + C 复制，Ctrl/Cmd + V 粘贴，Ctrl/Cmd + A 全选。
         </p>
       </InspectorSection>
 
@@ -530,71 +651,137 @@ function isTargetSourceSelected(sourceId) {
         <div v-if="currentBoundSource" class="binding-preview">
           <span>当前来源</span>
           <strong>{{ currentBoundSource.name }}</strong>
-          <span>最近刷新 {{ formatTime(currentBoundRuntime?.updatedAt) }}</span>
-          <span>绑定数量 {{ sourceBindingCounts[currentBoundSource.id] ?? 0 }}</span>
+          <span>最近刷新：{{ formatTime(currentBoundRuntime?.updatedAt) }}</span>
+          <span>绑定数量：{{ sourceBindingCounts[currentBoundSource.id] ?? 0 }}</span>
         </div>
       </InspectorSection>
 
       <InspectorSection
-        title="事件联动"
-        caption="仅在预览模式下生效，可触发高亮、刷新数据源或切换页面。"
+        title="事件编排"
+        caption="仅在预览模式生效，可按顺序执行多个动作，并为每一步设置延时。"
         storage-key="panel-widget-interaction"
       >
-        <label>
-          <span>点击动作</span>
-          <select v-model="clickAction">
-            <option v-for="option in interactionActionOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
+        <div class="interaction-flow__toolbar">
+          <p class="inspector-tip">点击当前组件后，会从上到下依次执行这里配置的动作。</p>
+          <button class="ghost inspector-inline-button" @click="addInteractionAction">新增动作</button>
+        </div>
 
-        <template v-if="clickAction === 'highlight-widgets'">
-          <span>目标组件</span>
-          <div v-if="otherWidgets.length" class="inspector-choice-grid">
-            <button
-              v-for="widget in otherWidgets"
-              :key="widget.id"
-              type="button"
-              class="inspector-choice-button"
-              :class="{ 'is-active': isTargetWidgetSelected(widget.id) }"
-              @click="toggleTargetWidget(widget.id)"
-            >
-              {{ widget.name }}
-            </button>
-          </div>
-          <div v-else class="inspector-empty">当前页没有可联动的其他组件。</div>
-        </template>
+        <div v-if="interactionActions.length" class="interaction-flow">
+          <article
+            v-for="(action, index) in interactionActions"
+            :key="action.id"
+            class="interaction-card"
+            :class="{ 'is-active': index === activeInteractionIndex }"
+          >
+            <div class="interaction-card__header">
+              <button
+                type="button"
+                class="interaction-card__summary"
+                @click="activeInteractionIndex = index"
+              >
+                <span class="interaction-card__eyebrow">动作 {{ index + 1 }}</span>
+                <strong class="interaction-card__title">{{ getInteractionActionLabel(action.action) }}</strong>
+                <span class="interaction-card__meta">{{ getInteractionActionSummary(action) }}</span>
+                <span class="interaction-card__delay">{{ getInteractionDelayLabel(action) }}</span>
+              </button>
 
-        <template v-if="clickAction === 'refresh-sources'">
-          <span>目标数据源</span>
-          <div v-if="project.dataSources.length" class="inspector-choice-grid">
-            <button
-              v-for="source in project.dataSources"
-              :key="source.id"
-              type="button"
-              class="inspector-choice-button"
-              :class="{ 'is-active': isTargetSourceSelected(source.id) }"
-              @click="toggleTargetSource(source.id)"
-            >
-              {{ source.name }}
-            </button>
-          </div>
-          <div v-else class="inspector-empty">当前项目还没有数据源。</div>
-        </template>
+              <div class="interaction-card__controls">
+                <button
+                  class="ghost interaction-card__control"
+                  :disabled="index === 0"
+                  @click="moveInteractionAction(index, -1)"
+                >
+                  上移
+                </button>
+                <button
+                  class="ghost interaction-card__control"
+                  :disabled="index === interactionActions.length - 1"
+                  @click="moveInteractionAction(index, 1)"
+                >
+                  下移
+                </button>
+                <button class="ghost danger interaction-card__control" @click="removeInteractionAction(index)">
+                  删除
+                </button>
+              </div>
+            </div>
 
-        <template v-if="clickAction === 'switch-page'">
-          <label>
-            <span>目标页面</span>
-            <select v-model="targetPageId">
-              <option value="">请选择</option>
-              <option v-for="item in availableTargetPages" :key="item.id" :value="item.id">
-                {{ item.name }}
-              </option>
-            </select>
-          </label>
-          <div v-if="!availableTargetPages.length" class="inspector-empty">当前只有一个页面，无法切换。</div>
-        </template>
+            <div v-if="index === activeInteractionIndex" class="interaction-card__body">
+              <div class="inspector-grid">
+                <label>
+                  <span>动作类型</span>
+                  <select :value="action.action" @change="updateInteractionActionType(action, $event.target.value)">
+                    <option v-for="option in interactionActionOptions" :key="option.value" :value="option.value">
+                      {{ option.label }}
+                    </option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>延时（ms）</span>
+                  <input
+                    :value="action.delay"
+                    type="number"
+                    min="0"
+                    step="100"
+                    @input="updateInteractionActionDelay(action, $event.target.value)"
+                  />
+                </label>
+              </div>
+
+              <template v-if="usesWidgetTargets(action.action)">
+                <span>目标组件</span>
+                <div v-if="getTargetWidgets(action.action).length" class="inspector-choice-grid">
+                  <button
+                    v-for="widget in getTargetWidgets(action.action)"
+                    :key="widget.id"
+                    type="button"
+                    class="inspector-choice-button"
+                    :class="{ 'is-active': isTargetWidgetSelected(widget.id, action) }"
+                    @click="toggleTargetWidget(widget.id, action)"
+                  >
+                    {{ widget.name }}
+                  </button>
+                </div>
+                <div v-else class="inspector-empty">{{ getTargetWidgetEmptyText(action.action) }}</div>
+              </template>
+
+              <template v-else-if="action.action === 'refresh-sources'">
+                <span>目标数据源</span>
+                <div v-if="project.dataSources.length" class="inspector-choice-grid">
+                  <button
+                    v-for="source in project.dataSources"
+                    :key="source.id"
+                    type="button"
+                    class="inspector-choice-button"
+                    :class="{ 'is-active': isTargetSourceSelected(source.id, action) }"
+                    @click="toggleTargetSource(source.id, action)"
+                  >
+                    {{ source.name }}
+                  </button>
+                </div>
+                <div v-else class="inspector-empty">当前项目还没有数据源。</div>
+              </template>
+
+              <template v-else-if="action.action === 'switch-page'">
+                <label>
+                  <span>目标页面</span>
+                  <select v-model="action.targetPageId">
+                    <option value="">请选择</option>
+                    <option v-for="item in availableTargetPages" :key="item.id" :value="item.id">
+                      {{ item.name }}
+                    </option>
+                  </select>
+                </label>
+                <div v-if="!availableTargetPages.length" class="inspector-empty">当前只有一个页面，无法切换。</div>
+              </template>
+
+              <div v-else class="inspector-empty">请选择动作类型后，再配置具体目标。</div>
+            </div>
+          </article>
+        </div>
+
+        <div v-else class="inspector-empty">当前还没有配置事件动作，点击“新增动作”开始编排。</div>
       </InspectorSection>
 
       <InspectorSection
@@ -607,7 +794,7 @@ function isTargetSourceSelected(sourceId) {
 
       <InspectorSection
         :title="widgetSectionTitle"
-        caption="基于组件类型动态展示对应的专属配置字段。"
+        caption="根据组件类型展示对应的专属配置字段。"
         storage-key="panel-widget-schema"
       >
         <SchemaFields :fields="widgetFields" :model="selectedWidget" />
@@ -622,7 +809,7 @@ function isTargetSourceSelected(sourceId) {
       >
         <SchemaFields :fields="pageFields" :model="project" />
         <p class="inspector-tip">页面名称用于管理和切换，画布标题用于大屏展示。</p>
-        <p class="inspector-tip">开启标尺后可从上方或左侧拖出参考线，拖出画布即可删除。</p>
+        <p class="inspector-tip">开启标尺后可从顶部或左侧拖出参考线，拖出画布即可删除。</p>
       </InspectorSection>
     </div>
 
@@ -641,11 +828,20 @@ function isTargetSourceSelected(sourceId) {
       :binding-counts="sourceBindingCounts"
       :data-source-runtime="dataSourceRuntime"
       @create-source="$emit('create-source', $event)"
+      @copy-all-sources-config="$emit('copy-all-sources-config')"
+      @clear-all-source-runtime="$emit('clear-all-source-runtime')"
       @delete-source="$emit('delete-source', $event)"
+      @duplicate-source="$emit('duplicate-source', $event)"
+      @export-source="$emit('export-source', $event)"
+      @import-source="$emit('import-source', $event)"
+      @import-source-as-new="$emit('import-source-as-new')"
+      @copy-source-runtime-payload="$emit('copy-source-runtime-payload', $event)"
       @refresh-source="$emit('refresh-source', $event)"
       @refresh-all-sources="$emit('refresh-all-sources')"
       @change-source-type="$emit('change-source-type', $event)"
       @update-source-payload="$emit('update-source-payload', $event)"
+      @copy-source-debug="$emit('copy-source-debug', $event)"
+      @clear-source-runtime="$emit('clear-source-runtime', $event)"
     />
 
     <HistoryPanel

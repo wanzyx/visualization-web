@@ -1793,6 +1793,97 @@ button.inspector-section__toggle:hover {
   font-size: 12px;
 }
 
+.interaction-flow {
+  display: grid;
+  gap: 12px;
+}
+
+.interaction-flow__toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.interaction-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(5, 14, 28, 0.72), rgba(4, 11, 22, 0.56)),
+    radial-gradient(circle at top right, rgba(72, 220, 255, 0.05), transparent 32%);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.interaction-card.is-active {
+  border-color: rgba(121, 255, 179, 0.28);
+  box-shadow:
+    0 0 0 1px rgba(121, 255, 179, 0.12),
+    0 16px 32px rgba(0, 0, 0, 0.14);
+}
+
+.interaction-card__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+button.interaction-card__summary {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  text-align: left;
+}
+
+button.interaction-card__summary:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.interaction-card__eyebrow {
+  color: rgba(121, 255, 179, 0.78);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.interaction-card__title {
+  font-size: 15px;
+}
+
+.interaction-card__meta,
+.interaction-card__delay {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.interaction-card__controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.interaction-card__control {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.interaction-card__body {
+  display: grid;
+  gap: 12px;
+}
+
 .layer-list {
   display: grid;
   gap: 10px;
@@ -1968,6 +2059,13 @@ button.inspector-section__toggle:hover {
   gap: 10px;
 }
 
+.data-source-panel__toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .data-source-panel__list {
   display: grid;
   gap: 12px;
@@ -1982,6 +2080,62 @@ button.inspector-section__toggle:hover {
   background:
     linear-gradient(180deg, rgba(4, 12, 22, 0.72), rgba(4, 12, 22, 0.52)),
     radial-gradient(circle at top right, rgba(72, 220, 255, 0.05), transparent 34%);
+}
+
+.data-source-panel__request {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(72, 220, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(6, 16, 31, 0.56);
+}
+
+.data-source-panel__request-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.data-source-panel__preview {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  background: rgba(5, 14, 26, 0.56);
+}
+
+.data-source-panel__preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 12px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.data-source-panel__preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.data-source-panel__preview-block {
+  display: grid;
+  gap: 8px;
+}
+
+.data-source-panel__preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-1);
+  font-size: 12px;
 }
 
 .data-source-panel__meta {
@@ -1999,10 +2153,59 @@ button.inspector-section__toggle:hover {
   font-size: 12px;
 }
 
+.data-source-panel__textarea--compact {
+  min-height: 112px;
+}
+
+.data-source-panel__textarea--preview {
+  min-height: 120px;
+}
+
+.data-source-panel__mini-button {
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.data-source-panel__checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-1);
+  font-size: 13px;
+}
+
+.data-source-panel__checkbox input {
+  margin: 0;
+}
+
+.data-source-panel__status {
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.data-source-panel__status--error {
+  border: 1px solid rgba(255, 132, 132, 0.24);
+  background: rgba(88, 16, 22, 0.32);
+  color: #ffd0cb;
+}
+
 .data-source-panel__actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.data-source-panel__action-button {
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
 }
 
 .status-bar {
@@ -2209,6 +2412,19 @@ button.inspector-section__toggle:hover {
   }
 
   .inspector-section__actions {
+    justify-content: flex-start;
+  }
+
+  .data-source-panel__toolbar-actions {
+    justify-content: flex-start;
+  }
+
+  .interaction-flow__toolbar,
+  .interaction-card__header {
+    grid-template-columns: 1fr;
+  }
+
+  .interaction-card__controls {
     justify-content: flex-start;
   }
 }

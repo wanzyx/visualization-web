@@ -2,7 +2,10 @@ export const interactionActionOptions = [
   { value: 'none', label: '无动作' },
   { value: 'highlight-widgets', label: '高亮组件' },
   { value: 'refresh-sources', label: '刷新数据源' },
-  { value: 'switch-page', label: '切换页面' }
+  { value: 'switch-page', label: '切换页面' },
+  { value: 'show-widgets', label: '显示组件' },
+  { value: 'hide-widgets', label: '隐藏组件' },
+  { value: 'toggle-widgets-visibility', label: '切换组件显隐' }
 ]
 
 export const alignOptions = [

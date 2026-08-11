@@ -18,6 +18,10 @@ const createPageId = () =>
   globalThis.crypto?.randomUUID?.() ??
   `page-${Date.now()}-${Math.random().toString(16).slice(2)}`
 
+const createInteractionActionId = () =>
+  globalThis.crypto?.randomUUID?.() ??
+  `interaction-${Date.now()}-${Math.random().toString(16).slice(2)}`
+
 const toFiniteNumber = (value, fallback) => {
   const nextValue = Number(value)
   return Number.isFinite(nextValue) ? nextValue : fallback
@@ -82,17 +86,59 @@ function normalizeDataBinding(binding) {
   }
 }
 
+function normalizeInteractionAction(action) {
+  return {
+    id:
+      typeof action?.id === 'string' && action.id
+        ? action.id
+        : createInteractionActionId(),
+    action: typeof action?.action === 'string' ? action.action : 'none',
+    targetWidgetIds: Array.isArray(action?.targetWidgetIds)
+      ? action.targetWidgetIds.filter((item) => typeof item === 'string')
+      : [],
+    targetSourceIds: Array.isArray(action?.targetSourceIds)
+      ? action.targetSourceIds.filter((item) => typeof item === 'string')
+      : [],
+    targetPageId: typeof action?.targetPageId === 'string' ? action.targetPageId : '',
+    delay: Math.max(0, toFiniteNumber(action?.delay, 0))
+  }
+}
+
+function buildLegacyInteractionActions(interaction) {
+  const action = normalizeInteractionAction({
+    action: interaction?.clickAction,
+    targetWidgetIds: interaction?.targetWidgetIds,
+    targetSourceIds: interaction?.targetSourceIds,
+    targetPageId: interaction?.targetPageId
+  })
+
+  const hasContent =
+    action.action !== 'none' ||
+    action.targetWidgetIds.length > 0 ||
+    action.targetSourceIds.length > 0 ||
+    Boolean(action.targetPageId) ||
+    action.delay > 0
+
+  return hasContent ? [action] : []
+}
+
 function normalizeInteraction(interaction) {
   return {
-    clickAction: typeof interaction?.clickAction === 'string' ? interaction.clickAction : 'none',
-    targetWidgetIds: Array.isArray(interaction?.targetWidgetIds)
-      ? interaction.targetWidgetIds.filter((item) => typeof item === 'string')
-      : [],
-    targetSourceIds: Array.isArray(interaction?.targetSourceIds)
-      ? interaction.targetSourceIds.filter((item) => typeof item === 'string')
-      : [],
-    targetPageId: typeof interaction?.targetPageId === 'string' ? interaction.targetPageId : ''
+    actions: Array.isArray(interaction?.actions)
+      ? interaction.actions.map((action) => normalizeInteractionAction(action))
+      : buildLegacyInteractionActions(interaction)
   }
+}
+
+export function createInteractionAction(action = 'none', overrides = {}) {
+  return normalizeInteractionAction({
+    action,
+    ...overrides
+  })
+}
+
+export function getInteractionActions(interaction) {
+  return normalizeInteraction(interaction).actions
 }
 
 function remapInteractionTargets(interaction, widgetIdMap, options = {}) {
@@ -101,17 +147,19 @@ function remapInteractionTargets(interaction, widgetIdMap, options = {}) {
   const pageIdMap = options.pageIdMap ?? new Map()
 
   return {
-    ...normalized,
-    targetWidgetIds: normalized.targetWidgetIds
-      .map((targetId) => {
-        if (widgetIdMap.has(targetId)) {
-          return widgetIdMap.get(targetId)
-        }
+    actions: normalized.actions.map((action) => ({
+      ...action,
+      targetWidgetIds: action.targetWidgetIds
+        .map((targetId) => {
+          if (widgetIdMap.has(targetId)) {
+            return widgetIdMap.get(targetId)
+          }
 
-        return dropMissing ? null : targetId
-      })
-      .filter(Boolean),
-    targetPageId: pageIdMap.get(normalized.targetPageId) ?? normalized.targetPageId
+          return dropMissing ? null : targetId
+        })
+        .filter(Boolean),
+      targetPageId: pageIdMap.get(action.targetPageId) ?? action.targetPageId
+    }))
   }
 }
 

@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent } from 'vue'
 import TextWidget from './renderers/TextWidget.vue'
 import StatWidget from './renderers/StatWidget.vue'
 import PanelWidget from './renderers/PanelWidget.vue'
+import { getInteractionActions } from '../editor/project'
 
 const BarChartWidget = defineAsyncComponent(() => import('./renderers/BarChartWidget.vue'))
 const LineChartWidget = defineAsyncComponent(() => import('./renderers/LineChartWidget.vue'))
@@ -72,20 +73,26 @@ const frameStyle = computed(() => ({
 }))
 
 const renderer = computed(() => componentMap[props.widget.type] || PanelWidget)
-const clickAction = computed(() => props.widget.interaction?.clickAction ?? 'none')
-const interactive = computed(() => props.previewMode && clickAction.value !== 'none')
+const interactionActions = computed(() =>
+  getInteractionActions(props.widget.interaction).filter((action) => action.action !== 'none')
+)
+const interactive = computed(() => props.previewMode && interactionActions.value.length > 0)
+
+const interactionLabelMap = {
+  'highlight-widgets': '联动高亮',
+  'refresh-sources': '刷新数据',
+  'switch-page': '切换页面',
+  'show-widgets': '显示组件',
+  'hide-widgets': '隐藏组件',
+  'toggle-widgets-visibility': '切换显隐'
+}
 
 const interactionLabel = computed(() => {
-  switch (clickAction.value) {
-    case 'highlight-widgets':
-      return '联动高亮'
-    case 'refresh-sources':
-      return '刷新数据'
-    case 'switch-page':
-      return '切换页面'
-    default:
-      return ''
+  if (interactionActions.value.length > 1) {
+    return `${interactionActions.value.length} 个动作`
   }
+
+  return interactionLabelMap[interactionActions.value[0]?.action] ?? ''
 })
 
 const displayWidget = computed(() => {
@@ -159,7 +166,7 @@ function handleFramePointerDown(event) {
 }
 
 function handleFrameClick(event) {
-  if (!props.previewMode || clickAction.value === 'none') {
+  if (!props.previewMode || !interactionActions.value.length) {
     return
   }
 
@@ -194,10 +201,7 @@ function handleFrameClick(event) {
       <span v-if="widget.groupId && !previewMode" class="stage-widget__group-badge">G</span>
       <span v-if="widget.locked && !previewMode" class="stage-widget__lock-badge">锁定</span>
       <span v-if="widget.dataBinding?.sourceId && !previewMode" class="stage-widget__data-badge">数据</span>
-      <span
-        v-if="interactionLabel && !previewMode"
-        class="stage-widget__action-badge"
-      >
+      <span v-if="interactionLabel && !previewMode" class="stage-widget__action-badge">
         {{ interactionLabel }}
       </span>
       <button

@@ -148,10 +148,7 @@ export function createWidget(type, overrides = {}) {
       sourceId: ''
     },
     interaction: {
-      clickAction: 'none',
-      targetWidgetIds: [],
-      targetSourceIds: [],
-      targetPageId: ''
+      actions: []
     },
     x: 80,
     y: 80,
@@ -166,10 +163,7 @@ export function createWidget(type, overrides = {}) {
       ...(overrides.dataBinding ?? {})
     },
     interaction: {
-      clickAction: 'none',
-      targetWidgetIds: [],
-      targetSourceIds: [],
-      targetPageId: '',
+      actions: [],
       ...(overrides.interaction ?? {})
     },
     style: {

@@ -6,7 +6,7 @@ import StageCanvas from './components/StageCanvas.vue'
 import InspectorPanel from './components/InspectorPanel.vue'
 import TopToolbar from './components/TopToolbar.vue'
 import { materials, createWidget } from './editor/materials'
-import { createDataSource, generateDataSourcePayload } from './editor/dataSources'
+import { createDataSource, normalizeDataSource, resolveDataSourceRuntime } from './editor/dataSources'
 import {
   STORAGE_KEY,
   TEMPLATE_STORAGE_KEY,
@@ -18,6 +18,7 @@ import {
   duplicateProjectPage,
   duplicateWidgets,
   expandIdsWithGroups,
+  getInteractionActions,
   getNextZIndex,
   getSelectionBounds,
   instantiateTemplate,
@@ -39,18 +40,22 @@ const previewMode = ref(false)
 const dialogMode = ref(null)
 const dialogText = ref('')
 const templateDraftName = ref('')
+const dialogSourceId = ref('')
 const statusMessage = ref('已启用多页面、模板库、数据源和事件联动')
 
 const project = ref(loadProject())
 const templates = ref(loadTemplateLibrary())
 const dataSourceRuntime = ref({})
+const widgetRuntimeState = ref({})
 const linkedWidgetIds = ref([])
 const runtimePageId = ref(initialRoute.pageId || '')
 const clipboardTemplate = ref(null)
 
 const sourceRefreshTimers = new Map()
+const interactionTimers = new Set()
 let linkedWidgetTimerId = 0
 let projectSyncTimerId = 0
+let interactionRunToken = 0
 let lastProjectSnapshot = JSON.stringify(project.value)
 
 const isRuntimeMode = computed(() => appMode.value === 'runtime')
@@ -67,7 +72,24 @@ const currentPage = computed(() => {
   return pages.find((page) => page.id === currentPageId.value) ?? pages[0] ?? null
 })
 
-const currentWidgets = computed(() => currentPage.value?.widgets ?? [])
+const runtimeWidgets = computed(() =>
+  (currentPage.value?.widgets ?? []).map((widget) => {
+    const runtimeHidden = widgetRuntimeState.value[widget.id]?.hidden
+
+    if (runtimeHidden === undefined) {
+      return widget
+    }
+
+    return {
+      ...widget,
+      hidden: runtimeHidden
+    }
+  })
+)
+
+const currentWidgets = computed(() =>
+  previewMode.value || isRuntimeMode.value ? runtimeWidgets.value : currentPage.value?.widgets ?? []
+)
 
 const currentCanvas = computed(() => ({
   id: currentPage.value?.id ?? '',
@@ -113,6 +135,9 @@ const canPaste = computed(() => Boolean(clipboardTemplate.value?.widgets?.length
 const canSaveTemplate = computed(() => selectedIds.value.length > 0)
 const canDeletePage = computed(() => project.value.pages.length > 1)
 const hasDataSources = computed(() => project.value.dataSources.length > 0)
+const activeDialogSource = computed(
+  () => project.value.dataSources.find((source) => source.id === dialogSourceId.value) ?? null
+)
 
 const sourceBindingCounts = computed(() => {
   const counts = Object.fromEntries(project.value.dataSources.map((source) => [source.id, 0]))
@@ -132,6 +157,67 @@ const sourceBindingCounts = computed(() => {
 
 function cloneDeep(value) {
   return JSON.parse(JSON.stringify(value))
+}
+
+function resetWidgetRuntimeState() {
+  widgetRuntimeState.value = {}
+}
+
+function setRuntimeWidgetHidden(widgetIds, hidden) {
+  const targetIds = Array.from(new Set(widgetIds.filter(Boolean)))
+
+  if (!targetIds.length) {
+    return 0
+  }
+
+  const nextState = { ...widgetRuntimeState.value }
+  let count = 0
+
+  targetIds.forEach((widgetId) => {
+    const widget = currentPage.value?.widgets.find((item) => item.id === widgetId)
+
+    if (!widget) {
+      return
+    }
+
+    nextState[widgetId] = {
+      ...(nextState[widgetId] ?? {}),
+      hidden
+    }
+    count += 1
+  })
+
+  widgetRuntimeState.value = nextState
+  return count
+}
+
+function toggleRuntimeWidgetHidden(widgetIds) {
+  const targetIds = Array.from(new Set(widgetIds.filter(Boolean)))
+
+  if (!targetIds.length) {
+    return 0
+  }
+
+  const nextState = { ...widgetRuntimeState.value }
+  let count = 0
+
+  targetIds.forEach((widgetId) => {
+    const widget = currentPage.value?.widgets.find((item) => item.id === widgetId)
+
+    if (!widget) {
+      return
+    }
+
+    const currentHidden = nextState[widgetId]?.hidden ?? widget.hidden
+    nextState[widgetId] = {
+      ...(nextState[widgetId] ?? {}),
+      hidden: !currentHidden
+    }
+    count += 1
+  })
+
+  widgetRuntimeState.value = nextState
+  return count
 }
 
 function loadProject() {
@@ -235,21 +321,27 @@ function cleanupInteractionReferences(options = {}) {
         return
       }
 
-      if (removedWidgetIds.size) {
-        widget.interaction.targetWidgetIds = (widget.interaction.targetWidgetIds ?? []).filter(
-          (id) => !removedWidgetIds.has(id)
-        )
+      if (!Array.isArray(widget.interaction.actions)) {
+        widget.interaction.actions = getInteractionActions(widget.interaction)
       }
 
-      if (removedSourceIds.size) {
-        widget.interaction.targetSourceIds = (widget.interaction.targetSourceIds ?? []).filter(
-          (id) => !removedSourceIds.has(id)
-        )
-      }
+      widget.interaction.actions.forEach((action) => {
+        if (removedWidgetIds.size) {
+          action.targetWidgetIds = (action.targetWidgetIds ?? []).filter(
+            (id) => !removedWidgetIds.has(id)
+          )
+        }
 
-      if (removedPageIds.size && removedPageIds.has(widget.interaction.targetPageId)) {
-        widget.interaction.targetPageId = ''
-      }
+        if (removedSourceIds.size) {
+          action.targetSourceIds = (action.targetSourceIds ?? []).filter(
+            (id) => !removedSourceIds.has(id)
+          )
+        }
+
+        if (removedPageIds.size && removedPageIds.has(action.targetPageId)) {
+          action.targetPageId = ''
+        }
+      })
     })
   })
 }
@@ -355,16 +447,30 @@ function getEditableSelectedWidgets(minCount = 1) {
   return editable.length >= minCount ? editable : []
 }
 
+function createSourceRuntimeEntry(source, overrides = {}) {
+  return {
+    payload: cloneDeep(overrides.payload ?? source.payload),
+    updatedAt: overrides.updatedAt ?? null,
+    refreshCount: overrides.refreshCount ?? 0,
+    error: overrides.error ?? '',
+    requestPreview: overrides.requestPreview ?? null,
+    responseStatus: overrides.responseStatus ?? null,
+    responseStatusText: overrides.responseStatusText ?? '',
+    responsePreview: overrides.responsePreview ?? '',
+    extractedPreview: overrides.extractedPreview ?? '',
+    mappedFieldCount: overrides.mappedFieldCount ?? 0
+  }
+}
+
 function syncDataSourceRuntime() {
   const previousRuntime = dataSourceRuntime.value
   const nextRuntime = {}
 
   project.value.dataSources.forEach((source) => {
-    nextRuntime[source.id] = {
-      payload: cloneDeep(source.payload),
-      updatedAt: previousRuntime[source.id]?.updatedAt ?? null,
-      refreshCount: previousRuntime[source.id]?.refreshCount ?? 0
-    }
+    nextRuntime[source.id] = createSourceRuntimeEntry(source, {
+      ...(previousRuntime[source.id] ?? {}),
+      payload: source.payload
+    })
   })
 
   dataSourceRuntime.value = nextRuntime
@@ -376,6 +482,38 @@ function clearSourceRefreshTimers() {
   })
 
   sourceRefreshTimers.clear()
+}
+
+function clearInteractionTimers() {
+  interactionTimers.forEach((timerId) => {
+    window.clearTimeout(timerId)
+  })
+
+  interactionTimers.clear()
+}
+
+function cancelInteractionRuns() {
+  interactionRunToken += 1
+  clearInteractionTimers()
+}
+
+function isInteractionRunActive(token) {
+  return token === interactionRunToken && (previewMode.value || isRuntimeMode.value)
+}
+
+function waitForInteractionDelay(delay, token) {
+  if (delay <= 0) {
+    return Promise.resolve(isInteractionRunActive(token))
+  }
+
+  return new Promise((resolve) => {
+    const timerId = window.setTimeout(() => {
+      interactionTimers.delete(timerId)
+      resolve(isInteractionRunActive(token))
+    }, delay)
+
+    interactionTimers.add(timerId)
+  })
 }
 
 function syncSourceRefreshTimers() {
@@ -391,33 +529,69 @@ function syncSourceRefreshTimers() {
     }
 
     const timerId = window.setInterval(() => {
-      refreshDataSource(source.id, { silent: true })
+      refreshDataSource(source.id, { silent: true }).catch((error) => {
+        console.warn(error)
+      })
     }, source.refreshInterval * 1000)
 
     sourceRefreshTimers.set(source.id, timerId)
   })
 }
 
-function refreshDataSource(sourceId, options = {}) {
+async function refreshDataSource(sourceId, options = {}) {
   const source = project.value.dataSources.find((item) => item.id === sourceId)
 
   if (!source) {
     return false
   }
 
-  const current = dataSourceRuntime.value[source.id] ?? {
-    payload: cloneDeep(source.payload),
-    updatedAt: null,
-    refreshCount: 0
+  const current = dataSourceRuntime.value[source.id] ?? createSourceRuntimeEntry(source)
+
+  const now = new Date()
+  const requestContext = {
+    timestamp: now.getTime(),
+    isoNow: now.toISOString(),
+    today: now.toISOString().slice(0, 10),
+    pageId: currentPageId.value,
+    pageName: currentPage.value?.name ?? '',
+    projectTitle: currentCanvas.value.meta.title ?? '',
+    sourceId: source.id,
+    sourceName: source.name
   }
 
-  dataSourceRuntime.value = {
-    ...dataSourceRuntime.value,
-    [source.id]: {
-      payload: generateDataSourcePayload(source),
-      updatedAt: Date.now(),
-      refreshCount: (current.refreshCount ?? 0) + 1
+  try {
+    const result = await resolveDataSourceRuntime(source, requestContext)
+
+    dataSourceRuntime.value = {
+      ...dataSourceRuntime.value,
+      [source.id]: createSourceRuntimeEntry(source, {
+        payload: result.payload,
+        updatedAt: Date.now(),
+        refreshCount: (current.refreshCount ?? 0) + 1,
+        error: '',
+        requestPreview: result.meta?.requestPreview ?? null,
+        responseStatus: result.meta?.responseStatus ?? null,
+        responseStatusText: result.meta?.responseStatusText ?? '',
+        responsePreview: result.meta?.responsePreview ?? '',
+        extractedPreview: result.meta?.extractedPreview ?? '',
+        mappedFieldCount: result.meta?.mappedFieldCount ?? 0
+      })
     }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误'
+
+    dataSourceRuntime.value = {
+      ...dataSourceRuntime.value,
+      [source.id]: createSourceRuntimeEntry(source, {
+        ...current,
+        payload: current.payload ?? source.payload,
+        error: message
+      })
+    }
+
+    statusMessage.value = `数据源 ${source.name} 刷新失败：${message}`
+    console.warn(error)
+    return false
   }
 
   if (!options.silent) {
@@ -427,7 +601,7 @@ function refreshDataSource(sourceId, options = {}) {
   return true
 }
 
-function refreshAllDataSources(options = {}) {
+async function refreshAllDataSources(options = {}) {
   if (!project.value.dataSources.length) {
     if (!options.silent) {
       statusMessage.value = '当前没有可刷新的数据源'
@@ -435,13 +609,240 @@ function refreshAllDataSources(options = {}) {
     return
   }
 
-  project.value.dataSources.forEach((source) => {
-    refreshDataSource(source.id, { silent: true })
-  })
+  await Promise.all(
+    project.value.dataSources.map((source) => refreshDataSource(source.id, { silent: true }))
+  )
 
   if (!options.silent) {
     statusMessage.value = `已刷新 ${project.value.dataSources.length} 个数据源`
   }
+}
+
+function formatClipboardValue(value) {
+  if (value === null || value === undefined || value === '') {
+    return ''
+  }
+
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+}
+
+async function copyTextToClipboard(value, messages) {
+  const text = formatClipboardValue(value)
+
+  if (!text) {
+    statusMessage.value = messages.emptyMessage ?? '当前没有可复制的内容'
+    return false
+  }
+
+  if (typeof navigator === 'undefined' || !navigator.clipboard) {
+    statusMessage.value = messages.failureMessage
+    return false
+  }
+
+  try {
+    await navigator.clipboard.writeText(text)
+    statusMessage.value = messages.successMessage
+    return true
+  } catch (error) {
+    statusMessage.value = messages.failureMessage
+    console.warn(error)
+    return false
+  }
+}
+
+async function copySourceDebug(payload) {
+  const source = project.value.dataSources.find((item) => item.id === payload.sourceId)
+
+  if (!source) {
+    return false
+  }
+
+  const runtime = dataSourceRuntime.value[source.id] ?? {}
+  const targetMap = {
+    request: {
+      value: runtime.requestPreview,
+      label: '最终请求预览'
+    },
+    extracted: {
+      value: runtime.extractedPreview,
+      label: '提取结果预览'
+    },
+    response: {
+      value: runtime.responsePreview,
+      label: '原始响应预览'
+    }
+  }
+  const target = targetMap[payload.target]
+
+  if (!target) {
+    return false
+  }
+
+  return copyTextToClipboard(target.value, {
+    successMessage: `已复制 ${source.name} 的${target.label}`,
+    failureMessage: `复制 ${source.name} 的${target.label}失败，请稍后重试`,
+    emptyMessage: `数据源 ${source.name} 暂无可复制的${target.label}`
+  })
+}
+
+async function copyAllSourcesConfig() {
+  if (!project.value.dataSources.length) {
+    statusMessage.value = '当前没有可复制的数据源配置'
+    return false
+  }
+
+  return copyTextToClipboard(buildAllSourcesExportPayload(project.value.dataSources), {
+    successMessage: `已复制 ${project.value.dataSources.length} 个数据源配置`,
+    failureMessage: '复制全部数据源配置失败，请稍后重试'
+  })
+}
+
+async function copySourceRuntimePayload(sourceId) {
+  const source = project.value.dataSources.find((item) => item.id === sourceId)
+
+  if (!source) {
+    return false
+  }
+
+  const runtime = dataSourceRuntime.value[source.id] ?? createSourceRuntimeEntry(source)
+
+  return copyTextToClipboard(runtime.payload, {
+    successMessage: `已复制 ${source.name} 的运行值`,
+    failureMessage: `复制 ${source.name} 的运行值失败，请稍后重试`,
+    emptyMessage: `数据源 ${source.name} 暂无可复制的运行值`
+  })
+}
+
+function clearSourceRuntime(sourceId, options = {}) {
+  const source = project.value.dataSources.find((item) => item.id === sourceId)
+
+  if (!source) {
+    return false
+  }
+
+  resetSourceRuntime(source)
+
+  if (!options.silent) {
+    statusMessage.value = `已清空数据源调试结果：${source.name}`
+  }
+
+  return true
+}
+
+function clearAllSourceRuntime(options = {}) {
+  if (!project.value.dataSources.length) {
+    if (!options.silent) {
+      statusMessage.value = '当前没有可清空的数据源调试结果'
+    }
+    return false
+  }
+
+  const nextRuntime = {}
+  project.value.dataSources.forEach((source) => {
+    nextRuntime[source.id] = createSourceRuntimeEntry(source)
+  })
+  dataSourceRuntime.value = nextRuntime
+
+  if (!options.silent) {
+    statusMessage.value = `已清空 ${project.value.dataSources.length} 个数据源调试结果`
+  }
+
+  return true
+}
+
+function serializeSourceConfig(source) {
+  return {
+    name: source.name,
+    type: source.type,
+    generator: source.generator,
+    refreshInterval: source.refreshInterval,
+    request: cloneDeep(source.request),
+    payload: cloneDeep(source.payload)
+  }
+}
+
+function buildSourceExportPayload(source) {
+  return JSON.stringify(serializeSourceConfig(source), null, 2)
+}
+
+function buildAllSourcesExportPayload(sources) {
+  return JSON.stringify(
+    {
+      dataSources: sources.map((source) => serializeSourceConfig(source))
+    },
+    null,
+    2
+  )
+}
+
+function parseImportedSourceConfigs(text, options = {}) {
+  const parsed = JSON.parse(text)
+  const rawSources = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.dataSources)
+      ? parsed.dataSources
+      : parsed && typeof parsed === 'object'
+        ? [parsed]
+        : []
+
+  if (!rawSources.length) {
+    throw new Error('No data sources found')
+  }
+
+  const normalizedSources = rawSources.map((item, index) => normalizeDataSource(item, index))
+
+  if (!options.allowMultiple && normalizedSources.length !== 1) {
+    throw new Error('Multiple sources are not supported in overwrite mode')
+  }
+
+  return normalizedSources
+}
+
+function resetSourceRuntime(source, overrides = {}) {
+  dataSourceRuntime.value = {
+    ...dataSourceRuntime.value,
+    [source.id]: createSourceRuntimeEntry(source, overrides)
+  }
+}
+
+function clearIncompatibleSourceBindings(sourceId, sourceType) {
+  project.value.pages.forEach((page) => {
+    page.widgets.forEach((widget) => {
+      if (widget.dataBinding?.sourceId === sourceId && widget.type !== sourceType) {
+        widget.dataBinding.sourceId = ''
+      }
+    })
+  })
+}
+
+function openSourceExportDialog(sourceId) {
+  const source = project.value.dataSources.find((item) => item.id === sourceId)
+
+  if (!source) {
+    return
+  }
+
+  dialogSourceId.value = source.id
+  dialogMode.value = 'source-export'
+  dialogText.value = buildSourceExportPayload(source)
+}
+
+function openSourceImportDialog(sourceId) {
+  const source = project.value.dataSources.find((item) => item.id === sourceId)
+
+  if (!source) {
+    return
+  }
+
+  dialogSourceId.value = source.id
+  dialogMode.value = 'source-import'
+  dialogText.value = ''
+}
+
+function openSourceCreateDialog() {
+  dialogSourceId.value = ''
+  dialogMode.value = 'source-create-import'
+  dialogText.value = ''
 }
 
 async function copyRuntimeLink() {
@@ -457,13 +858,10 @@ async function copyRuntimeLink() {
     url.searchParams.set('page', pageId)
   }
 
-  try {
-    await navigator.clipboard.writeText(url.toString())
-    statusMessage.value = '运行地址已复制到剪贴板'
-  } catch (error) {
-    statusMessage.value = '运行地址复制失败，请手动复制浏览器地址'
-    console.warn(error)
-  }
+  await copyTextToClipboard(url.toString(), {
+    successMessage: '运行地址已复制到剪贴板',
+    failureMessage: '运行地址复制失败，请手动复制浏览器地址'
+  })
 }
 
 function clearLinkedWidgetState() {
@@ -496,7 +894,9 @@ function flashLinkedWidgets(widgetIds) {
 
 function enterRuntimeMode() {
   closeDialog()
+  cancelInteractionRuns()
   previewMode.value = false
+  resetWidgetRuntimeState()
   clearLinkedWidgetState()
   runtimePageId.value = currentPageId.value || project.value.activePageId || project.value.pages[0]?.id || ''
   appMode.value = 'runtime'
@@ -506,6 +906,8 @@ function enterRuntimeMode() {
 }
 
 function exitRuntimeMode() {
+  cancelInteractionRuns()
+  resetWidgetRuntimeState()
   const pageId = currentPageId.value
 
   if (pageId) {
@@ -524,6 +926,100 @@ function createSource(type) {
   const source = createDataSource(type)
   project.value.dataSources.unshift(source)
   statusMessage.value = `已新增数据源：${source.name}`
+}
+
+function duplicateSource(sourceId) {
+  const sourceIndex = project.value.dataSources.findIndex((item) => item.id === sourceId)
+
+  if (sourceIndex < 0) {
+    return
+  }
+
+  const source = project.value.dataSources[sourceIndex]
+  const nextSource = createDataSource(source.type, {
+    name: `${source.name} 副本`,
+    generator: source.generator,
+    refreshInterval: source.refreshInterval,
+    request: cloneDeep(source.request),
+    payload: cloneDeep(source.payload)
+  })
+
+  queueHistoryLabel('复制数据源')
+  project.value.dataSources.splice(sourceIndex + 1, 0, nextSource)
+  statusMessage.value = `已复制数据源：${nextSource.name}`
+}
+
+function applySourceImport() {
+  const source = activeDialogSource.value
+
+  if (!source) {
+    closeDialog()
+    return
+  }
+
+  try {
+    const [normalized] = parseImportedSourceConfigs(dialogText.value)
+
+    queueHistoryLabel('导入数据源配置')
+    source.name = normalized.name
+    source.type = normalized.type
+    source.generator = normalized.generator
+    source.refreshInterval = normalized.refreshInterval
+    source.request = cloneDeep(normalized.request)
+    source.payload = cloneDeep(normalized.payload)
+    clearIncompatibleSourceBindings(source.id, source.type)
+    resetSourceRuntime(source)
+    closeDialog()
+    statusMessage.value = `已导入数据源配置：${source.name}`
+  } catch (error) {
+    statusMessage.value = '数据源配置导入失败，请检查 JSON 结构'
+    console.warn(error)
+  }
+}
+
+function createSourceFromImport() {
+  try {
+    const normalizedSources = parseImportedSourceConfigs(dialogText.value, { allowMultiple: true })
+    const importedSources = normalizedSources.map((normalized) =>
+      createDataSource(normalized.type, {
+        name: normalized.name,
+        generator: normalized.generator,
+        refreshInterval: normalized.refreshInterval,
+        request: cloneDeep(normalized.request),
+        payload: cloneDeep(normalized.payload)
+      })
+    )
+
+    queueHistoryLabel(importedSources.length > 1 ? '批量导入数据源' : '导入数据源')
+    project.value.dataSources = [...importedSources, ...project.value.dataSources]
+    importedSources.forEach((source) => {
+      resetSourceRuntime(source)
+    })
+    closeDialog()
+    statusMessage.value =
+      importedSources.length > 1
+        ? `已批量导入 ${importedSources.length} 个数据源`
+        : `已导入并新建数据源：${importedSources[0].name}`
+    return
+
+    const normalized = normalizeDataSource(JSON.parse(dialogText.value), project.value.dataSources.length)
+    const source = createDataSource(normalized.type, {
+      name: normalized.name,
+      generator: normalized.generator,
+      refreshInterval: normalized.refreshInterval,
+      request: cloneDeep(normalized.request),
+      payload: cloneDeep(normalized.payload)
+    })
+
+    queueHistoryLabel('导入数据源')
+    project.value.dataSources.unshift(source)
+    resetSourceRuntime(source)
+    closeDialog()
+    statusMessage.value = `已导入并新建数据源：${source.name}`
+  } catch (error) {
+    statusMessage.value = '数据源配置导入失败，请检查 JSON 结构'
+    console.warn(error)
+  }
 }
 
 function deleteSource(sourceId) {
@@ -567,13 +1063,8 @@ function changeSourceType(payload) {
   source.generator = nextSource.generator
   source.payload = nextSource.payload
 
-  project.value.pages.forEach((page) => {
-    page.widgets.forEach((widget) => {
-      if (widget.dataBinding?.sourceId === source.id && widget.type !== source.type) {
-        widget.dataBinding.sourceId = ''
-      }
-    })
-  })
+  clearIncompatibleSourceBindings(source.id, source.type)
+  resetSourceRuntime(source)
 
   statusMessage.value = `已切换数据源类型：${source.name}`
 }
@@ -1179,29 +1670,45 @@ function resetProject() {
   previewMode.value = false
   runtimePageId.value = ''
   clipboardTemplate.value = null
+  resetWidgetRuntimeState()
   clearLinkedWidgetState()
   selectDefaultWidget(currentPage.value)
   statusMessage.value = '已恢复示例项目'
 }
 
 function openExportDialog() {
+  dialogSourceId.value = ''
   dialogMode.value = 'export'
   dialogText.value = JSON.stringify(project.value, null, 2)
 }
 
 function openImportDialog() {
+  dialogSourceId.value = ''
   dialogMode.value = 'import'
   dialogText.value = ''
 }
 
+function getJsonDialogEyebrow() {
+  return getActiveJsonDialogEyebrow()
+}
+
+function getJsonDialogTitle() {
+  return getActiveJsonDialogTitle()
+}
+
+function isJsonDialogReadonly() {
+  return isActiveJsonDialogReadonly()
+}
+
+function getJsonDialogActionLabel() {
+  return getActiveJsonDialogActionLabel()
+}
+
 async function copyExport() {
-  try {
-    await navigator.clipboard.writeText(dialogText.value)
-    statusMessage.value = 'JSON 已复制到剪贴板'
-  } catch (error) {
-    statusMessage.value = '复制失败，请手动复制 JSON'
-    console.warn(error)
-  }
+  await copyTextToClipboard(dialogText.value, {
+    successMessage: 'JSON 已复制到剪贴板',
+    failureMessage: '复制失败，请手动复制 JSON'
+  })
 }
 
 function applyImport() {
@@ -1214,6 +1721,7 @@ function applyImport() {
     previewMode.value = false
     runtimePageId.value = ''
     clipboardTemplate.value = null
+    resetWidgetRuntimeState()
     clearLinkedWidgetState()
     selectDefaultWidget(currentPage.value)
     statusMessage.value = '项目 JSON 已导入'
@@ -1223,10 +1731,168 @@ function applyImport() {
   }
 }
 
+function getJsonDialogEyebrowLabel() {
+  if (dialogMode.value === 'source-export') {
+    return '数据源导出'
+  }
+
+  if (dialogMode.value === 'source-import' || dialogMode.value === 'source-create-import') {
+    return '数据源导入'
+  }
+
+  return dialogMode.value === 'export' ? '项目导出' : '项目导入'
+}
+
+function getJsonDialogTitleLabel() {
+  const sourceName = activeDialogSource.value?.name ?? '当前数据源'
+
+  if (dialogMode.value === 'source-export') {
+    return `复制 ${sourceName} 的配置 JSON`
+  }
+
+  if (dialogMode.value === 'source-import') {
+    return `粘贴配置 JSON 并覆盖 ${sourceName}`
+  }
+
+  if (dialogMode.value === 'source-create-import') {
+    return '粘贴配置 JSON 并新建数据源'
+  }
+
+  return dialogMode.value === 'export' ? '复制当前项目 JSON' : '粘贴项目 JSON 并导入'
+}
+
+function isJsonDialogReadonlyState() {
+  return dialogMode.value === 'export' || dialogMode.value === 'source-export'
+}
+
+function getJsonDialogActionLabelText() {
+  if (dialogMode.value === 'source-export') {
+    return '复制配置 JSON'
+  }
+
+  if (dialogMode.value === 'source-import') {
+    return '确认导入配置'
+  }
+
+  if (dialogMode.value === 'source-create-import') {
+    return '确认新建数据源'
+  }
+
+  return dialogMode.value === 'export' ? '复制 JSON' : '确认导入'
+}
+
+function getJsonDialogHintText() {
+  if (dialogMode.value === 'source-create-import') {
+    return '支持单个配置对象、配置数组，或包含 dataSources 字段的 JSON 结构。'
+  }
+
+  if (dialogMode.value === 'source-import') {
+    return '覆盖当前数据源时仅支持单个配置对象。'
+  }
+
+  return ''
+}
+
+async function handleJsonDialogAction() {
+  if (dialogMode.value === 'source-export') {
+    const exportLabel = `${activeDialogSource.value?.name ?? '数据源'} 配置 JSON`
+
+    await copyTextToClipboard(dialogText.value, {
+      successMessage: `${exportLabel} 已复制到剪贴板`,
+      failureMessage: `复制失败，请手动复制${exportLabel}`
+    })
+    return
+  }
+
+  if (dialogMode.value === 'source-import') {
+    applySourceImport()
+    return
+  }
+
+  if (dialogMode.value === 'source-create-import') {
+    createSourceFromImport()
+    return
+  }
+
+  if (dialogMode.value === 'export') {
+    await copyExport()
+    return
+  }
+
+  applyImport()
+}
+
+function getActiveJsonDialogEyebrow() {
+  if (dialogMode.value === 'source-export') {
+    return '数据源导出'
+  }
+
+  if (dialogMode.value === 'source-import') {
+    return '数据源导入'
+  }
+
+  return dialogMode.value === 'export' ? '项目导出' : '项目导入'
+}
+
+function getActiveJsonDialogTitle() {
+  const sourceName = activeDialogSource.value?.name ?? '当前数据源'
+
+  if (dialogMode.value === 'source-export') {
+    return `复制 ${sourceName} 的配置 JSON`
+  }
+
+  if (dialogMode.value === 'source-import') {
+    return `粘贴配置 JSON 并覆盖 ${sourceName}`
+  }
+
+  return dialogMode.value === 'export' ? '复制当前项目 JSON' : '粘贴项目 JSON 并导入'
+}
+
+function isActiveJsonDialogReadonly() {
+  return dialogMode.value === 'export' || dialogMode.value === 'source-export'
+}
+
+function getActiveJsonDialogActionLabel() {
+  if (dialogMode.value === 'source-export') {
+    return '复制配置 JSON'
+  }
+
+  if (dialogMode.value === 'source-import') {
+    return '确认导入配置'
+  }
+
+  return dialogMode.value === 'export' ? '复制 JSON' : '确认导入'
+}
+
+async function handleActiveJsonDialogAction() {
+  if (dialogMode.value === 'source-export') {
+    const exportLabel = `${activeDialogSource.value?.name ?? '数据源'} 配置 JSON`
+
+    await copyTextToClipboard(dialogText.value, {
+      successMessage: `${exportLabel} 已复制到剪贴板`,
+      failureMessage: `复制失败，请手动复制${exportLabel}`
+    })
+    return
+  }
+
+  if (dialogMode.value === 'source-import') {
+    applySourceImport()
+    return
+  }
+
+  if (dialogMode.value === 'export') {
+    await copyExport()
+    return
+  }
+
+  applyImport()
+}
+
 function closeDialog() {
   dialogMode.value = null
   dialogText.value = ''
   templateDraftName.value = ''
+  dialogSourceId.value = ''
 }
 
 function createProjectSnapshot() {
@@ -1314,7 +1980,76 @@ function moveSelectionBy(deltaX, deltaY) {
   })
 }
 
-function handleWidgetAction(widgetId) {
+async function executeInteractionAction(widget, action) {
+  switch (action.action) {
+    case 'highlight-widgets': {
+      const targetIds = action.targetWidgetIds ?? []
+      flashLinkedWidgets(targetIds)
+
+      if (targetIds.length) {
+        statusMessage.value = `已联动高亮 ${targetIds.length} 个组件`
+      }
+
+      return targetIds.length > 0
+    }
+    case 'refresh-sources': {
+      const fallbackSourceId = widget.dataBinding?.sourceId
+      const targetSourceIds = action.targetSourceIds?.length
+        ? action.targetSourceIds
+        : fallbackSourceId
+          ? [fallbackSourceId]
+          : []
+
+      const results = await Promise.all(
+        targetSourceIds.map((sourceId) => refreshDataSource(sourceId, { silent: true }))
+      )
+      const refreshCount = results.filter(Boolean).length
+
+      if (refreshCount > 0) {
+        statusMessage.value = `已联动刷新 ${refreshCount} 个数据源`
+      }
+
+      return refreshCount > 0
+    }
+    case 'switch-page':
+      if (action.targetPageId) {
+        switchPage(action.targetPageId, { previewNavigation: true })
+        return true
+      }
+      return false
+    case 'show-widgets': {
+      const visibleCount = setRuntimeWidgetHidden(action.targetWidgetIds ?? [], false)
+
+      if (visibleCount > 0) {
+        statusMessage.value = `已显示 ${visibleCount} 个组件`
+      }
+
+      return visibleCount > 0
+    }
+    case 'hide-widgets': {
+      const hiddenCount = setRuntimeWidgetHidden(action.targetWidgetIds ?? [], true)
+
+      if (hiddenCount > 0) {
+        statusMessage.value = `已隐藏 ${hiddenCount} 个组件`
+      }
+
+      return hiddenCount > 0
+    }
+    case 'toggle-widgets-visibility': {
+      const toggledCount = toggleRuntimeWidgetHidden(action.targetWidgetIds ?? [])
+
+      if (toggledCount > 0) {
+        statusMessage.value = `已切换 ${toggledCount} 个组件的显隐状态`
+      }
+
+      return toggledCount > 0
+    }
+    default:
+      return false
+  }
+}
+
+async function handleWidgetAction(widgetId) {
   if (!previewMode.value && !isRuntimeMode.value) {
     return
   }
@@ -1325,45 +2060,23 @@ function handleWidgetAction(widgetId) {
     return
   }
 
-  const interaction = widget.interaction ?? { clickAction: 'none' }
+  const actions = getInteractionActions(widget.interaction).filter((action) => action.action !== 'none')
 
-  switch (interaction.clickAction) {
-    case 'highlight-widgets': {
-      const targetIds = interaction.targetWidgetIds ?? []
-      flashLinkedWidgets(targetIds)
+  if (!actions.length) {
+    return
+  }
 
-      if (targetIds.length) {
-        statusMessage.value = `已联动高亮 ${targetIds.length} 个组件`
-      }
-      break
+  cancelInteractionRuns()
+  const token = interactionRunToken
+
+  for (const action of actions) {
+    const canContinue = await waitForInteractionDelay(action.delay ?? 0, token)
+
+    if (!canContinue) {
+      return
     }
-    case 'refresh-sources': {
-      const fallbackSourceId = widget.dataBinding?.sourceId
-      const targetSourceIds = interaction.targetSourceIds?.length
-        ? interaction.targetSourceIds
-        : fallbackSourceId
-          ? [fallbackSourceId]
-          : []
 
-      let refreshCount = 0
-      targetSourceIds.forEach((sourceId) => {
-        if (refreshDataSource(sourceId, { silent: true })) {
-          refreshCount += 1
-        }
-      })
-
-      if (refreshCount > 0) {
-        statusMessage.value = `已联动刷新 ${refreshCount} 个数据源`
-      }
-      break
-    }
-    case 'switch-page':
-      if (interaction.targetPageId) {
-        switchPage(interaction.targetPageId, { previewNavigation: true })
-      }
-      break
-    default:
-      break
+    await executeInteractionAction(widget, action)
   }
 }
 
@@ -1530,6 +2243,8 @@ watch(previewMode, (enabled) => {
     return
   }
 
+  cancelInteractionRuns()
+  resetWidgetRuntimeState()
   clearLinkedWidgetState()
   syncSourceRefreshTimers()
 
@@ -1546,6 +2261,7 @@ watch(previewMode, (enabled) => {
 onMounted(() => {
   if (isRuntimeMode.value) {
     runtimePageId.value = currentPageId.value
+    resetWidgetRuntimeState()
     refreshAllDataSources({ silent: true })
     syncSourceRefreshTimers()
   }
@@ -1554,6 +2270,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  cancelInteractionRuns()
   flushProjectSync()
   window.removeEventListener('keydown', handleKeydown)
   clearSourceRefreshTimers()
@@ -1673,11 +2390,20 @@ onBeforeUnmount(() => {
         @align-selected="alignSelected"
         @distribute-selected="distributeSelected"
         @create-source="createSource"
+        @copy-all-sources-config="copyAllSourcesConfig"
+        @clear-all-source-runtime="clearAllSourceRuntime"
+        @duplicate-source="duplicateSource"
+        @export-source="openSourceExportDialog"
+        @import-source="openSourceImportDialog"
+        @import-source-as-new="openSourceCreateDialog"
+        @copy-source-runtime-payload="copySourceRuntimePayload"
         @delete-source="deleteSource"
+        @clear-source-runtime="clearSourceRuntime"
         @refresh-source="refreshDataSource"
         @refresh-all-sources="refreshAllDataSources"
         @change-source-type="changeSourceType"
         @update-source-payload="updateSourcePayload"
+        @copy-source-debug="copySourceDebug"
         @undo="undoProject"
         @redo="redoProject"
       />
@@ -1720,11 +2446,40 @@ onBeforeUnmount(() => {
           </div>
         </template>
 
+        <template
+          v-else-if="
+            dialogMode === 'source-export' ||
+            dialogMode === 'source-import' ||
+            dialogMode === 'source-create-import'
+          "
+        >
+          <div class="dialog-card__header">
+            <div>
+              <p>{{ getJsonDialogEyebrowLabel() }}</p>
+              <h3>{{ getJsonDialogTitleLabel() }}</h3>
+            </div>
+            <button class="ghost" @click="closeDialog">关闭</button>
+          </div>
+
+          <p v-if="getJsonDialogHintText()" class="inspector-tip">{{ getJsonDialogHintText() }}</p>
+
+          <textarea
+            v-model="dialogText"
+            class="dialog-card__textarea"
+            :readonly="isJsonDialogReadonlyState()"
+            spellcheck="false"
+          />
+
+          <div class="dialog-card__actions">
+            <button class="primary" @click="handleJsonDialogAction()">{{ getJsonDialogActionLabelText() }}</button>
+          </div>
+        </template>
+
         <template v-else>
           <div class="dialog-card__header">
             <div>
-              <p>{{ dialogMode === 'export' ? '项目导出' : '项目导入' }}</p>
-              <h3>{{ dialogMode === 'export' ? '复制当前项目 JSON' : '粘贴项目 JSON 并导入' }}</h3>
+              <p>{{ getJsonDialogEyebrowLabel() }}</p>
+              <h3>{{ getJsonDialogTitleLabel() }}</h3>
             </div>
             <button class="ghost" @click="closeDialog">关闭</button>
           </div>
@@ -1732,13 +2487,12 @@ onBeforeUnmount(() => {
           <textarea
             v-model="dialogText"
             class="dialog-card__textarea"
-            :readonly="dialogMode === 'export'"
+            :readonly="isJsonDialogReadonlyState()"
             spellcheck="false"
           />
 
           <div class="dialog-card__actions">
-            <button v-if="dialogMode === 'export'" class="primary" @click="copyExport">复制 JSON</button>
-            <button v-else class="primary" @click="applyImport">确认导入</button>
+            <button class="primary" @click="handleJsonDialogAction()">{{ getJsonDialogActionLabelText() }}</button>
           </div>
         </template>
       </div>
