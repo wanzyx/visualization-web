@@ -176,6 +176,33 @@ export function createPageFields({ page, project }) {
       set: (value) => {
         project.meta.showGrid = value
       }
+    },
+    {
+      key: 'page-ruler-visible',
+      label: '显示标尺',
+      type: 'checkbox',
+      get: () => project.meta.showRulers,
+      set: (value) => {
+        project.meta.showRulers = value
+      }
+    },
+    {
+      key: 'page-guide-visible',
+      label: '启用参考线',
+      type: 'checkbox',
+      get: () => project.meta.showGuides,
+      set: (value) => {
+        project.meta.showGuides = value
+      }
+    },
+    {
+      key: 'page-guide-color',
+      label: '参考线颜色',
+      type: 'text',
+      get: () => project.meta.guideColor,
+      set: (value) => {
+        project.meta.guideColor = value
+      }
     }
   ]
 }

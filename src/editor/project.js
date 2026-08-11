@@ -30,7 +30,50 @@ export const defaultPageMeta = {
   background:
     'radial-gradient(circle at top, rgba(44, 126, 255, 0.32), transparent 36%), linear-gradient(135deg, #071225 0%, #08162c 45%, #03070d 100%)',
   gridColor: 'rgba(72, 210, 255, 0.12)',
-  showGrid: true
+  showGrid: true,
+  showRulers: true,
+  showGuides: true,
+  guideColor: 'rgba(255, 173, 92, 0.92)',
+  guides: {
+    vertical: [],
+    horizontal: []
+  }
+}
+
+function normalizeGuideValues(values, max) {
+  return Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .map((item) => Number(item))
+        .filter((item) => Number.isFinite(item))
+        .map((item) => Math.min(Math.max(item, 0), max))
+    )
+  ).sort((a, b) => a - b)
+}
+
+function normalizePageMeta(meta) {
+  const screenWidth = Math.max(320, toFiniteNumber(meta?.screenWidth, defaultPageMeta.screenWidth))
+  const screenHeight = Math.max(180, toFiniteNumber(meta?.screenHeight, defaultPageMeta.screenHeight))
+
+  return {
+    ...cloneDeep(defaultPageMeta),
+    ...(meta ?? {}),
+    screenWidth,
+    screenHeight,
+    showGrid: meta?.showGrid === undefined ? defaultPageMeta.showGrid : Boolean(meta.showGrid),
+    showRulers:
+      meta?.showRulers === undefined ? defaultPageMeta.showRulers : Boolean(meta.showRulers),
+    showGuides:
+      meta?.showGuides === undefined ? defaultPageMeta.showGuides : Boolean(meta.showGuides),
+    guideColor:
+      typeof meta?.guideColor === 'string' && meta.guideColor.trim()
+        ? meta.guideColor
+        : defaultPageMeta.guideColor,
+    guides: {
+      vertical: normalizeGuideValues(meta?.guides?.vertical, screenWidth),
+      horizontal: normalizeGuideValues(meta?.guides?.horizontal, screenHeight)
+    }
+  }
 }
 
 function normalizeDataBinding(binding) {
@@ -102,10 +145,7 @@ export function createProjectPage(name = '新页面', options = {}) {
   return {
     id: options.id ?? createPageId(),
     name,
-    meta: {
-      ...cloneDeep(defaultPageMeta),
-      ...(options.meta ?? {})
-    },
+    meta: normalizePageMeta(options.meta ?? {}),
     widgets
   }
 }

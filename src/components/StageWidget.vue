@@ -145,14 +145,10 @@ function handleResizeStart(event) {
 
 function handleFramePointerDown(event) {
   if (props.previewMode) {
-    if (event.button === 0 && clickAction.value !== 'none') {
-      emit('trigger-action', {
-        widgetId: props.widget.id,
-        event
-      })
-    }
     return
   }
+
+  event.preventDefault()
 
   if (props.canMove) {
     handleDragStart(event)
@@ -160,6 +156,17 @@ function handleFramePointerDown(event) {
   }
 
   handleSelect(event)
+}
+
+function handleFrameClick(event) {
+  if (!props.previewMode || clickAction.value === 'none') {
+    return
+  }
+
+  emit('trigger-action', {
+    widgetId: props.widget.id,
+    event
+  })
 }
 </script>
 
@@ -179,7 +186,8 @@ function handleFramePointerDown(event) {
     <div
       class="stage-widget__frame"
       :style="frameStyle"
-      @pointerdown.stop.prevent="handleFramePointerDown"
+      @pointerdown.stop="handleFramePointerDown"
+      @click.stop="handleFrameClick"
     >
       <component :is="renderer" :widget="displayWidget" />
       <span v-if="!previewMode" class="stage-widget__name">{{ widget.name }}</span>

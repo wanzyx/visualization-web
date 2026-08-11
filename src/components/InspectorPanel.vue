@@ -88,6 +88,8 @@ defineEmits([
   'reorder-layer',
   'set-selected-hidden',
   'set-selected-locked',
+  'align-selected',
+  'distribute-selected',
   'create-source',
   'delete-source',
   'refresh-source',
@@ -111,6 +113,10 @@ const commonGroupId = computed(() => {
 
   return props.selectedWidgets.every((item) => item.groupId === firstGroupId) ? firstGroupId : null
 })
+
+const editableSelectedCount = computed(
+  () => props.selectedWidgets.filter((item) => !item.locked && !item.hidden).length
+)
 
 const compatibleSources = computed(() => {
   if (!props.selectedWidget) {
@@ -390,13 +396,80 @@ function isTargetSourceSelected(sourceId) {
       </InspectorSection>
 
       <InspectorSection
+        title="排版操作"
+        caption="针对未锁定且可见的组件执行对齐和分布。"
+        storage-key="panel-multi-layout"
+      >
+        <p class="inspector-tip">当前可参与排版的组件：{{ editableSelectedCount }} 个</p>
+
+        <div class="inspector-action-grid inspector-action-grid--wide">
+          <button
+            class="ghost"
+            :disabled="editableSelectedCount < 2"
+            @click="$emit('align-selected', 'left')"
+          >
+            左对齐
+          </button>
+          <button
+            class="ghost"
+            :disabled="editableSelectedCount < 2"
+            @click="$emit('align-selected', 'center-x')"
+          >
+            水平居中
+          </button>
+          <button
+            class="ghost"
+            :disabled="editableSelectedCount < 2"
+            @click="$emit('align-selected', 'right')"
+          >
+            右对齐
+          </button>
+          <button
+            class="ghost"
+            :disabled="editableSelectedCount < 2"
+            @click="$emit('align-selected', 'top')"
+          >
+            顶部对齐
+          </button>
+          <button
+            class="ghost"
+            :disabled="editableSelectedCount < 2"
+            @click="$emit('align-selected', 'center-y')"
+          >
+            垂直居中
+          </button>
+          <button
+            class="ghost"
+            :disabled="editableSelectedCount < 2"
+            @click="$emit('align-selected', 'bottom')"
+          >
+            底部对齐
+          </button>
+          <button
+            class="ghost"
+            :disabled="editableSelectedCount < 3"
+            @click="$emit('distribute-selected', 'horizontal')"
+          >
+            横向分布
+          </button>
+          <button
+            class="ghost"
+            :disabled="editableSelectedCount < 3"
+            @click="$emit('distribute-selected', 'vertical')"
+          >
+            纵向分布
+          </button>
+        </div>
+      </InspectorSection>
+
+      <InspectorSection
         title="交互提示"
         caption="常用快捷键和选择方式一览。"
         storage-key="panel-multi-tips"
       >
         <p class="inspector-tip">
           可以使用 Ctrl/Cmd 点选追加组件，拖动画布空白区域进行框选，Ctrl/Cmd + G 编组，Shift +
-          Ctrl/Cmd + G 取消编组。
+          Ctrl/Cmd + G 取消编组，Ctrl/Cmd + C 复制，Ctrl/Cmd + V 粘贴，Ctrl/Cmd + A 全选。
         </p>
       </InspectorSection>
 
@@ -549,6 +622,7 @@ function isTargetSourceSelected(sourceId) {
       >
         <SchemaFields :fields="pageFields" :model="project" />
         <p class="inspector-tip">页面名称用于管理和切换，画布标题用于大屏展示。</p>
+        <p class="inspector-tip">开启标尺后可从上方或左侧拖出参考线，拖出画布即可删除。</p>
       </InspectorSection>
     </div>
 

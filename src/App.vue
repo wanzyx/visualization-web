@@ -29,6 +29,7 @@ import {
 
 const HISTORY_LIMIT = 80
 const HISTORY_MERGE_WINDOW = 600
+const PROJECT_SYNC_DELAY = 120
 const TEMPLATE_LIMIT = 30
 const LINKED_WIDGET_DURATION = 1800
 
@@ -45,9 +46,12 @@ const templates = ref(loadTemplateLibrary())
 const dataSourceRuntime = ref({})
 const linkedWidgetIds = ref([])
 const runtimePageId = ref(initialRoute.pageId || '')
+const clipboardTemplate = ref(null)
 
 const sourceRefreshTimers = new Map()
 let linkedWidgetTimerId = 0
+let projectSyncTimerId = 0
+let lastProjectSnapshot = JSON.stringify(project.value)
 
 const isRuntimeMode = computed(() => appMode.value === 'runtime')
 
@@ -104,6 +108,8 @@ const canGroup = computed(() => selectedIds.value.length > 1)
 const canUngroup = computed(() => selectedWidgets.value.some((item) => item.groupId))
 const canUndo = computed(() => undoStack.value.length > 0)
 const canRedo = computed(() => redoStack.value.length > 0)
+const canCopy = computed(() => selectedIds.value.length > 0)
+const canPaste = computed(() => Boolean(clipboardTemplate.value?.widgets?.length))
 const canSaveTemplate = computed(() => selectedIds.value.length > 0)
 const canDeletePage = computed(() => project.value.pages.length > 1)
 const hasDataSources = computed(() => project.value.dataSources.length > 0)
@@ -210,7 +216,91 @@ function startHistorySession(label) {
 }
 
 function endHistorySession() {
+  flushProjectSync()
   activeHistoryLabel.value = null
+}
+
+function cleanupInteractionReferences(options = {}) {
+  const removedWidgetIds = new Set(options.widgetIds ?? [])
+  const removedSourceIds = new Set(options.sourceIds ?? [])
+  const removedPageIds = new Set(options.pageIds ?? [])
+
+  if (!removedWidgetIds.size && !removedSourceIds.size && !removedPageIds.size) {
+    return
+  }
+
+  project.value.pages.forEach((page) => {
+    page.widgets.forEach((widget) => {
+      if (!widget.interaction) {
+        return
+      }
+
+      if (removedWidgetIds.size) {
+        widget.interaction.targetWidgetIds = (widget.interaction.targetWidgetIds ?? []).filter(
+          (id) => !removedWidgetIds.has(id)
+        )
+      }
+
+      if (removedSourceIds.size) {
+        widget.interaction.targetSourceIds = (widget.interaction.targetSourceIds ?? []).filter(
+          (id) => !removedSourceIds.has(id)
+        )
+      }
+
+      if (removedPageIds.size && removedPageIds.has(widget.interaction.targetPageId)) {
+        widget.interaction.targetPageId = ''
+      }
+    })
+  })
+}
+
+function flushProjectSync() {
+  if (projectSyncTimerId) {
+    window.clearTimeout(projectSyncTimerId)
+    projectSyncTimerId = 0
+  }
+
+  const nextSnapshot = JSON.stringify(project.value)
+
+  if (nextSnapshot === lastProjectSnapshot) {
+    return
+  }
+
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(STORAGE_KEY, nextSnapshot)
+  }
+
+  if (!isRestoringHistory.value) {
+    const previousSnapshot = lastProjectSnapshot
+    const label = pendingHistoryLabel.value || activeHistoryLabel.value || '编辑画布'
+    const now = Date.now()
+    const shouldMerge =
+      undoStack.value.length > 0 &&
+      label === lastHistoryCommitLabel.value &&
+      now - lastHistoryCommitAt.value < HISTORY_MERGE_WINDOW
+
+    if (!shouldMerge) {
+      pushUndoEntry(createHistoryEntry(previousSnapshot, currentHistoryLabel.value))
+    }
+
+    redoStack.value = []
+    currentHistoryLabel.value = label
+    lastHistoryCommitAt.value = now
+    lastHistoryCommitLabel.value = label
+    pendingHistoryLabel.value = null
+  }
+
+  lastProjectSnapshot = nextSnapshot
+}
+
+function scheduleProjectSync(delay = PROJECT_SYNC_DELAY) {
+  if (projectSyncTimerId) {
+    window.clearTimeout(projectSyncTimerId)
+  }
+
+  projectSyncTimerId = window.setTimeout(() => {
+    flushProjectSync()
+  }, delay)
 }
 
 function sanitizeSelection(ids, primaryId = null) {
@@ -224,6 +314,18 @@ function sanitizeSelection(ids, primaryId = null) {
 function selectDefaultWidget(page = currentPage.value) {
   const firstId = page?.widgets[0]?.id ?? null
   sanitizeSelection(firstId ? [firstId] : [], firstId)
+}
+
+function selectAllWidgets() {
+  if (!currentWidgets.value.length) {
+    return
+  }
+
+  sanitizeSelection(
+    currentWidgets.value.map((item) => item.id),
+    currentWidgets.value.at(-1)?.id ?? null
+  )
+  statusMessage.value = `已选中当前页 ${currentWidgets.value.length} 个组件`
 }
 
 function updateSelection(payload) {
@@ -246,6 +348,11 @@ function toggleSelectionByIds(idsToToggle, primaryId) {
 
 function getExpandedSelectedIds() {
   return expandIdsWithGroups(selectedIds.value, currentWidgets.value)
+}
+
+function getEditableSelectedWidgets(minCount = 1) {
+  const editable = selectedWidgets.value.filter((item) => !item.locked && !item.hidden)
+  return editable.length >= minCount ? editable : []
 }
 
 function syncDataSourceRuntime() {
@@ -436,6 +543,9 @@ function deleteSource(sourceId) {
       }
     })
   })
+  cleanupInteractionReferences({
+    sourceIds: [sourceId]
+  })
 
   const nextRuntime = { ...dataSourceRuntime.value }
   delete nextRuntime[sourceId]
@@ -574,6 +684,10 @@ function deletePage(pageId) {
 
   queueHistoryLabel('删除页面')
   const [removedPage] = project.value.pages.splice(index, 1)
+  cleanupInteractionReferences({
+    widgetIds: removedPage.widgets.map((widget) => widget.id),
+    pageIds: [removedPage.id]
+  })
 
   if (removedPage.id === project.value.activePageId) {
     const fallbackPage = project.value.pages[index] ?? project.value.pages[index - 1] ?? project.value.pages[0]
@@ -636,6 +750,73 @@ function addTemplate(templateId, position = {}) {
   statusMessage.value = `已添加模板：${template.name}`
 }
 
+function copySelected() {
+  if (!canCopy.value) {
+    return
+  }
+
+  const template = createTemplateFromSelection(
+    currentCanvas.value,
+    selectedIds.value,
+    '剪贴板选区'
+  )
+  const bounds = getSelectionBounds(selectedWidgets.value)
+
+  if (!template || !bounds) {
+    return
+  }
+
+  clipboardTemplate.value = {
+    ...template,
+    origin: {
+      x: bounds.x,
+      y: bounds.y
+    },
+    pasteCount: 0
+  }
+  statusMessage.value = `已复制 ${selectedWidgets.value.length} 个组件`
+}
+
+function pasteClipboard() {
+  const template = clipboardTemplate.value
+
+  if (!template?.widgets?.length) {
+    return
+  }
+
+  const width = template.preview?.width ?? 0
+  const height = template.preview?.height ?? 0
+  const pasteCount = (template.pasteCount ?? 0) + 1
+  const baseX = template.origin?.x ?? 80
+  const baseY = template.origin?.y ?? 80
+  const offset = 28 * pasteCount
+  const nextX = clamp(baseX + offset, 0, Math.max(currentCanvas.value.meta.screenWidth - width, 0))
+  const nextY = clamp(baseY + offset, 0, Math.max(currentCanvas.value.meta.screenHeight - height, 0))
+
+  queueHistoryLabel(template.widgets.length > 1 ? '粘贴组件组合' : '粘贴组件')
+  const createdWidgets = instantiateTemplate(currentCanvas.value, template, {
+    x: nextX,
+    y: nextY
+  })
+
+  if (!createdWidgets.length) {
+    clearQueuedHistoryLabel()
+    return
+  }
+
+  currentWidgets.value.push(...createdWidgets)
+  sortWidgets(currentWidgets.value)
+  sanitizeSelection(
+    createdWidgets.map((item) => item.id),
+    createdWidgets.at(-1)?.id ?? null
+  )
+  clipboardTemplate.value = {
+    ...template,
+    pasteCount
+  }
+  statusMessage.value = `已粘贴 ${createdWidgets.length} 个组件到当前页`
+}
+
 function removeTemplate(templateId) {
   const template = templates.value.find((item) => item.id === templateId)
 
@@ -694,6 +875,92 @@ function handleLayerSelection(payload) {
   }
 
   sanitizeSelection(relatedIds, payload.widgetId)
+}
+
+function alignSelected(mode) {
+  const targets = getEditableSelectedWidgets(2)
+  const bounds = getSelectionBounds(targets)
+
+  if (!bounds) {
+    return
+  }
+
+  queueHistoryLabel('对齐组件')
+
+  targets.forEach((widget) => {
+    switch (mode) {
+      case 'left':
+        widget.x = bounds.x
+        break
+      case 'center-x':
+        widget.x = bounds.x + (bounds.w - widget.w) / 2
+        break
+      case 'right':
+        widget.x = bounds.x + bounds.w - widget.w
+        break
+      case 'top':
+        widget.y = bounds.y
+        break
+      case 'center-y':
+        widget.y = bounds.y + (bounds.h - widget.h) / 2
+        break
+      case 'bottom':
+        widget.y = bounds.y + bounds.h - widget.h
+        break
+      default:
+        break
+    }
+  })
+
+  const actionLabelMap = {
+    left: '左对齐',
+    'center-x': '水平居中',
+    right: '右对齐',
+    top: '顶部对齐',
+    'center-y': '垂直居中',
+    bottom: '底部对齐'
+  }
+
+  statusMessage.value = `已${actionLabelMap[mode] ?? '对齐'} ${targets.length} 个组件`
+}
+
+function distributeSelected(axis) {
+  const targets = [...getEditableSelectedWidgets(3)]
+
+  if (!targets.length) {
+    return
+  }
+
+  const bounds = getSelectionBounds(targets)
+
+  if (!bounds) {
+    return
+  }
+
+  const horizontal = axis === 'horizontal'
+  targets.sort((a, b) => (horizontal ? a.x - b.x : a.y - b.y))
+
+  const totalSize = targets.reduce((sum, widget) => sum + (horizontal ? widget.w : widget.h), 0)
+  const availableSize = horizontal ? bounds.w : bounds.h
+  const gap = (availableSize - totalSize) / (targets.length - 1)
+  let cursor = horizontal ? bounds.x : bounds.y
+
+  queueHistoryLabel(horizontal ? '横向分布组件' : '纵向分布组件')
+
+  targets.forEach((widget) => {
+    if (horizontal) {
+      widget.x = cursor
+      cursor += widget.w + gap
+      return
+    }
+
+    widget.y = cursor
+    cursor += widget.h + gap
+  })
+
+  statusMessage.value = horizontal
+    ? `已横向分布 ${targets.length} 个组件`
+    : `已纵向分布 ${targets.length} 个组件`
 }
 
 function setWidgetHidden(widgetId, hidden) {
@@ -811,6 +1078,9 @@ function deleteSelected() {
   queueHistoryLabel('删除组件')
   const deleteSet = new Set(expandedIds)
   currentPage.value.widgets = currentPage.value.widgets.filter((item) => !deleteSet.has(item.id))
+  cleanupInteractionReferences({
+    widgetIds: expandedIds
+  })
   sanitizeSelection([], null)
   statusMessage.value = `已删除 ${expandedIds.length} 个组件`
 }
@@ -908,6 +1178,7 @@ function resetProject() {
   appMode.value = 'editor'
   previewMode.value = false
   runtimePageId.value = ''
+  clipboardTemplate.value = null
   clearLinkedWidgetState()
   selectDefaultWidget(currentPage.value)
   statusMessage.value = '已恢复示例项目'
@@ -942,6 +1213,7 @@ function applyImport() {
     appMode.value = 'editor'
     previewMode.value = false
     runtimePageId.value = ''
+    clipboardTemplate.value = null
     clearLinkedWidgetState()
     selectDefaultWidget(currentPage.value)
     statusMessage.value = '项目 JSON 已导入'
@@ -958,7 +1230,7 @@ function closeDialog() {
 }
 
 function createProjectSnapshot() {
-  return JSON.stringify(project.value)
+  return lastProjectSnapshot
 }
 
 function pushUndoEntry(entry) {
@@ -974,6 +1246,7 @@ async function restoreHistoryEntry(entry) {
   project.value = normalizeProjectSchema(JSON.parse(entry.snapshot))
   clearLinkedWidgetState()
   await nextTick()
+  flushProjectSync()
 
   if (previewMode.value) {
     sanitizeSelection([], null)
@@ -994,6 +1267,7 @@ async function restoreHistoryEntry(entry) {
 }
 
 async function undoProject() {
+  flushProjectSync()
   const entry = undoStack.value.pop()
 
   if (!entry) {
@@ -1006,6 +1280,7 @@ async function undoProject() {
 }
 
 async function redoProject() {
+  flushProjectSync()
   const entry = redoStack.value.pop()
 
   if (!entry) {
@@ -1134,6 +1409,24 @@ function handleKeydown(event) {
     return
   }
 
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+    event.preventDefault()
+    copySelected()
+    return
+  }
+
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') {
+    event.preventDefault()
+    pasteClipboard()
+    return
+  }
+
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+    event.preventDefault()
+    selectAllWidgets()
+    return
+  }
+
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
     event.preventDefault()
 
@@ -1206,37 +1499,11 @@ watch([appMode, currentPageId], () => {
 })
 
 watch(
-  () => JSON.stringify(project.value),
-  (nextSnapshot, previousSnapshot) => {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(STORAGE_KEY, nextSnapshot)
-    }
-
-    if (isRestoringHistory.value) {
-      return
-    }
-
-    if (typeof previousSnapshot !== 'string' || nextSnapshot === previousSnapshot) {
-      return
-    }
-
-    const label = pendingHistoryLabel.value || activeHistoryLabel.value || '编辑画布'
-    const now = Date.now()
-    const shouldMerge =
-      undoStack.value.length > 0 &&
-      label === lastHistoryCommitLabel.value &&
-      now - lastHistoryCommitAt.value < HISTORY_MERGE_WINDOW
-
-    if (!shouldMerge) {
-      pushUndoEntry(createHistoryEntry(previousSnapshot, currentHistoryLabel.value))
-    }
-
-    redoStack.value = []
-    currentHistoryLabel.value = label
-    lastHistoryCommitAt.value = now
-    lastHistoryCommitLabel.value = label
-    pendingHistoryLabel.value = null
-  }
+  project,
+  () => {
+    scheduleProjectSync(activeHistoryLabel.value ? 32 : PROJECT_SYNC_DELAY)
+  },
+  { deep: true }
 )
 
 watch(
@@ -1287,6 +1554,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  flushProjectSync()
   window.removeEventListener('keydown', handleKeydown)
   clearSourceRefreshTimers()
   clearLinkedWidgetState()
@@ -1306,6 +1574,8 @@ onBeforeUnmount(() => {
       :can-ungroup="canUngroup"
       :can-undo="canUndo"
       :can-redo="canRedo"
+      :can-copy="canCopy"
+      :can-paste="canPaste"
       :can-save-template="canSaveTemplate"
       :has-data-sources="hasDataSources"
       :runtime-mode="isRuntimeMode"
@@ -1317,6 +1587,8 @@ onBeforeUnmount(() => {
       @export-project="openExportDialog"
       @import-project="openImportDialog"
       @duplicate-selected="duplicateSelected"
+      @copy-selected="copySelected"
+      @paste-selected="pasteClipboard"
       @delete-selected="deleteSelected"
       @bring-to-front="bringToFront"
       @send-to-back="sendToBack"
@@ -1398,6 +1670,8 @@ onBeforeUnmount(() => {
         @reorder-layer="reorderLayers"
         @set-selected-hidden="setSelectedHidden"
         @set-selected-locked="setSelectedLocked"
+        @align-selected="alignSelected"
+        @distribute-selected="distributeSelected"
         @create-source="createSource"
         @delete-source="deleteSource"
         @refresh-source="refreshDataSource"
