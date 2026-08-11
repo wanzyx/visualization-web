@@ -5,12 +5,16 @@ import StageCanvas from './components/StageCanvas.vue'
 import InspectorPanel from './components/InspectorPanel.vue'
 import TopToolbar from './components/TopToolbar.vue'
 import { materials, createWidget } from './editor/materials'
+import { createDataSource, generateDataSourcePayload } from './editor/dataSources'
 import {
   STORAGE_KEY,
   TEMPLATE_STORAGE_KEY,
   createDemoProject,
+  createProjectPage,
   createTemplateFromSelection,
   createWidgetGroup,
+  defaultPageMeta,
+  duplicateProjectPage,
   duplicateWidgets,
   expandIdsWithGroups,
   getNextZIndex,
@@ -25,17 +29,39 @@ import {
 const HISTORY_LIMIT = 80
 const HISTORY_MERGE_WINDOW = 600
 const TEMPLATE_LIMIT = 30
+const LINKED_WIDGET_DURATION = 1800
 
 const previewMode = ref(false)
 const dialogMode = ref(null)
 const dialogText = ref('')
 const templateDraftName = ref('')
-const statusMessage = ref('已启用自动保存、图层管理、模板库和历史记录')
+const statusMessage = ref('已启用多页面、模板库、数据源和事件联动')
 
 const project = ref(loadProject())
 const templates = ref(loadTemplateLibrary())
-const selectedIds = ref(project.value.widgets[0]?.id ? [project.value.widgets[0].id] : [])
-const primarySelectedId = ref(project.value.widgets[0]?.id ?? null)
+const dataSourceRuntime = ref({})
+const linkedWidgetIds = ref([])
+
+const sourceRefreshTimers = new Map()
+let linkedWidgetTimerId = 0
+
+const currentPage = computed(() => {
+  const pages = project.value.pages ?? []
+  return pages.find((page) => page.id === project.value.activePageId) ?? pages[0] ?? null
+})
+
+const currentWidgets = computed(() => currentPage.value?.widgets ?? [])
+
+const currentCanvas = computed(() => ({
+  id: currentPage.value?.id ?? '',
+  name: currentPage.value?.name ?? '',
+  meta: currentPage.value?.meta ?? defaultPageMeta,
+  widgets: currentWidgets.value,
+  dataSources: project.value.dataSources ?? []
+}))
+
+const selectedIds = ref(currentWidgets.value[0]?.id ? [currentWidgets.value[0].id] : [])
+const primarySelectedId = ref(currentWidgets.value[0]?.id ?? null)
 
 const undoStack = ref([])
 const redoStack = ref([])
@@ -48,7 +74,7 @@ const lastHistoryCommitLabel = ref('')
 
 const selectedWidgets = computed(() => {
   const selection = new Set(selectedIds.value)
-  return project.value.widgets.filter((item) => selection.has(item.id))
+  return currentWidgets.value.filter((item) => selection.has(item.id))
 })
 
 const selectedWidget = computed(() => {
@@ -56,7 +82,7 @@ const selectedWidget = computed(() => {
     return null
   }
 
-  return project.value.widgets.find((item) => item.id === selectedIds.value[0]) ?? null
+  return currentWidgets.value.find((item) => item.id === selectedIds.value[0]) ?? null
 })
 
 const selectedBounds = computed(() => getSelectionBounds(selectedWidgets.value))
@@ -66,6 +92,28 @@ const canUngroup = computed(() => selectedWidgets.value.some((item) => item.grou
 const canUndo = computed(() => undoStack.value.length > 0)
 const canRedo = computed(() => redoStack.value.length > 0)
 const canSaveTemplate = computed(() => selectedIds.value.length > 0)
+const canDeletePage = computed(() => project.value.pages.length > 1)
+const hasDataSources = computed(() => project.value.dataSources.length > 0)
+
+const sourceBindingCounts = computed(() => {
+  const counts = Object.fromEntries(project.value.dataSources.map((source) => [source.id, 0]))
+
+  project.value.pages.forEach((page) => {
+    page.widgets.forEach((widget) => {
+      const sourceId = widget.dataBinding?.sourceId
+
+      if (sourceId) {
+        counts[sourceId] = (counts[sourceId] ?? 0) + 1
+      }
+    })
+  })
+
+  return counts
+})
+
+function cloneDeep(value) {
+  return JSON.parse(JSON.stringify(value))
+}
 
 function loadProject() {
   if (typeof localStorage === 'undefined') {
@@ -84,6 +132,10 @@ function loadProject() {
     console.warn(error)
     return createDemoProject()
   }
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max)
 }
 
 function createHistoryEntry(snapshot, label) {
@@ -111,11 +163,16 @@ function endHistorySession() {
 }
 
 function sanitizeSelection(ids, primaryId = null) {
-  const availableIds = new Set(project.value.widgets.map((item) => item.id))
+  const availableIds = new Set(currentWidgets.value.map((item) => item.id))
   const uniqueIds = Array.from(new Set(ids.filter((id) => availableIds.has(id))))
 
   selectedIds.value = uniqueIds
   primarySelectedId.value = uniqueIds.includes(primaryId) ? primaryId : uniqueIds.at(-1) ?? null
+}
+
+function selectDefaultWidget(page = currentPage.value) {
+  const firstId = page?.widgets[0]?.id ?? null
+  sanitizeSelection(firstId ? [firstId] : [], firstId)
 }
 
 function updateSelection(payload) {
@@ -137,20 +194,299 @@ function toggleSelectionByIds(idsToToggle, primaryId) {
 }
 
 function getExpandedSelectedIds() {
-  return expandIdsWithGroups(selectedIds.value, project.value.widgets)
+  return expandIdsWithGroups(selectedIds.value, currentWidgets.value)
+}
+
+function syncDataSourceRuntime() {
+  const previousRuntime = dataSourceRuntime.value
+  const nextRuntime = {}
+
+  project.value.dataSources.forEach((source) => {
+    nextRuntime[source.id] = {
+      payload: cloneDeep(source.payload),
+      updatedAt: previousRuntime[source.id]?.updatedAt ?? null,
+      refreshCount: previousRuntime[source.id]?.refreshCount ?? 0
+    }
+  })
+
+  dataSourceRuntime.value = nextRuntime
+}
+
+function clearSourceRefreshTimers() {
+  sourceRefreshTimers.forEach((timerId) => {
+    window.clearInterval(timerId)
+  })
+
+  sourceRefreshTimers.clear()
+}
+
+function syncSourceRefreshTimers() {
+  clearSourceRefreshTimers()
+
+  if (!previewMode.value) {
+    return
+  }
+
+  project.value.dataSources.forEach((source) => {
+    if (source.refreshInterval <= 0) {
+      return
+    }
+
+    const timerId = window.setInterval(() => {
+      refreshDataSource(source.id, { silent: true })
+    }, source.refreshInterval * 1000)
+
+    sourceRefreshTimers.set(source.id, timerId)
+  })
+}
+
+function refreshDataSource(sourceId, options = {}) {
+  const source = project.value.dataSources.find((item) => item.id === sourceId)
+
+  if (!source) {
+    return false
+  }
+
+  const current = dataSourceRuntime.value[source.id] ?? {
+    payload: cloneDeep(source.payload),
+    updatedAt: null,
+    refreshCount: 0
+  }
+
+  dataSourceRuntime.value = {
+    ...dataSourceRuntime.value,
+    [source.id]: {
+      payload: generateDataSourcePayload(source),
+      updatedAt: Date.now(),
+      refreshCount: (current.refreshCount ?? 0) + 1
+    }
+  }
+
+  if (!options.silent) {
+    statusMessage.value = `已刷新数据源：${source.name}`
+  }
+
+  return true
+}
+
+function refreshAllDataSources(options = {}) {
+  if (!project.value.dataSources.length) {
+    if (!options.silent) {
+      statusMessage.value = '当前没有可刷新的数据源'
+    }
+    return
+  }
+
+  project.value.dataSources.forEach((source) => {
+    refreshDataSource(source.id, { silent: true })
+  })
+
+  if (!options.silent) {
+    statusMessage.value = `已刷新 ${project.value.dataSources.length} 个数据源`
+  }
+}
+
+function clearLinkedWidgetState() {
+  linkedWidgetIds.value = []
+
+  if (linkedWidgetTimerId) {
+    window.clearTimeout(linkedWidgetTimerId)
+    linkedWidgetTimerId = 0
+  }
+}
+
+function flashLinkedWidgets(widgetIds) {
+  const validIds = widgetIds.filter((id) => currentWidgets.value.some((widget) => widget.id === id))
+
+  if (!validIds.length) {
+    return
+  }
+
+  linkedWidgetIds.value = validIds
+
+  if (linkedWidgetTimerId) {
+    window.clearTimeout(linkedWidgetTimerId)
+  }
+
+  linkedWidgetTimerId = window.setTimeout(() => {
+    linkedWidgetIds.value = []
+    linkedWidgetTimerId = 0
+  }, LINKED_WIDGET_DURATION)
+}
+
+function createSource(type) {
+  queueHistoryLabel('新增数据源')
+  const source = createDataSource(type)
+  project.value.dataSources.unshift(source)
+  statusMessage.value = `已新增数据源：${source.name}`
+}
+
+function deleteSource(sourceId) {
+  const source = project.value.dataSources.find((item) => item.id === sourceId)
+
+  if (!source) {
+    return
+  }
+
+  queueHistoryLabel('删除数据源')
+  project.value.dataSources = project.value.dataSources.filter((item) => item.id !== sourceId)
+
+  project.value.pages.forEach((page) => {
+    page.widgets.forEach((widget) => {
+      if (widget.dataBinding?.sourceId === sourceId) {
+        widget.dataBinding.sourceId = ''
+      }
+    })
+  })
+
+  const nextRuntime = { ...dataSourceRuntime.value }
+  delete nextRuntime[sourceId]
+  dataSourceRuntime.value = nextRuntime
+  statusMessage.value = `已删除数据源：${source.name}`
+}
+
+function changeSourceType(payload) {
+  const source = project.value.dataSources.find((item) => item.id === payload.sourceId)
+
+  if (!source || source.type === payload.type) {
+    return
+  }
+
+  const nextSource = createDataSource(payload.type, { name: source.name })
+
+  queueHistoryLabel('切换数据源类型')
+  source.type = nextSource.type
+  source.generator = nextSource.generator
+  source.payload = nextSource.payload
+
+  project.value.pages.forEach((page) => {
+    page.widgets.forEach((widget) => {
+      if (widget.dataBinding?.sourceId === source.id && widget.type !== source.type) {
+        widget.dataBinding.sourceId = ''
+      }
+    })
+  })
+
+  statusMessage.value = `已切换数据源类型：${source.name}`
+}
+
+function updateSourcePayload(payload) {
+  const source = project.value.dataSources.find((item) => item.id === payload.sourceId)
+
+  if (!source) {
+    return
+  }
+
+  try {
+    const parsed = JSON.parse(payload.value)
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Payload must be an object')
+    }
+
+    queueHistoryLabel('更新数据源数据')
+    source.payload = {
+      ...source.payload,
+      ...parsed
+    }
+    statusMessage.value = `已更新数据源：${source.name}`
+  } catch (error) {
+    statusMessage.value = '数据源 JSON 解析失败，请检查格式'
+    console.warn(error)
+  }
+}
+
+function switchPage(pageId, options = {}) {
+  const nextPage = project.value.pages.find((page) => page.id === pageId)
+
+  if (!nextPage || nextPage.id === project.value.activePageId) {
+    return
+  }
+
+  project.value.activePageId = nextPage.id
+  clearLinkedWidgetState()
+
+  if (previewMode.value || options.previewNavigation) {
+    sanitizeSelection([], null)
+  } else {
+    selectDefaultWidget(nextPage)
+  }
+
+  statusMessage.value = `已切换页面：${nextPage.name}`
+}
+
+function createPage() {
+  const nextIndex = project.value.pages.length + 1
+  const page = createProjectPage(`页面 ${nextIndex}`, {
+    meta: {
+      ...cloneDeep(currentPage.value?.meta ?? defaultPageMeta),
+      title: `新建页面 ${nextIndex}`
+    }
+  })
+
+  queueHistoryLabel('新建页面')
+  const currentIndex = project.value.pages.findIndex((item) => item.id === project.value.activePageId)
+  project.value.pages.splice(currentIndex + 1, 0, page)
+  project.value.activePageId = page.id
+  selectDefaultWidget(page)
+  statusMessage.value = `已新建页面：${page.name}`
+}
+
+function duplicatePage(pageId) {
+  const sourcePage = project.value.pages.find((page) => page.id === pageId)
+
+  if (!sourcePage) {
+    return
+  }
+
+  queueHistoryLabel('复制页面')
+  const nextPage = duplicateProjectPage(sourcePage)
+  const index = project.value.pages.findIndex((page) => page.id === pageId)
+  project.value.pages.splice(index + 1, 0, nextPage)
+  project.value.activePageId = nextPage.id
+  selectDefaultWidget(nextPage)
+  statusMessage.value = `已复制页面：${nextPage.name}`
+}
+
+function deletePage(pageId) {
+  if (project.value.pages.length <= 1) {
+    return
+  }
+
+  const index = project.value.pages.findIndex((page) => page.id === pageId)
+
+  if (index === -1) {
+    return
+  }
+
+  queueHistoryLabel('删除页面')
+  const [removedPage] = project.value.pages.splice(index, 1)
+
+  if (removedPage.id === project.value.activePageId) {
+    const fallbackPage = project.value.pages[index] ?? project.value.pages[index - 1] ?? project.value.pages[0]
+    project.value.activePageId = fallbackPage.id
+
+    if (previewMode.value) {
+      sanitizeSelection([], null)
+    } else {
+      selectDefaultWidget(fallbackPage)
+    }
+  }
+
+  statusMessage.value = `已删除页面：${removedPage.name}`
 }
 
 function addWidget(type, position = {}) {
   queueHistoryLabel('添加组件')
 
   const nextWidget = createWidget(type, {
-    x: clamp(position.x ?? 180, 0, Math.max(project.value.meta.screenWidth - 160, 0)),
-    y: clamp(position.y ?? 180, 0, Math.max(project.value.meta.screenHeight - 120, 0)),
-    zIndex: getNextZIndex(project.value.widgets)
+    x: clamp(position.x ?? 180, 0, Math.max(currentCanvas.value.meta.screenWidth - 160, 0)),
+    y: clamp(position.y ?? 180, 0, Math.max(currentCanvas.value.meta.screenHeight - 120, 0)),
+    zIndex: getNextZIndex(currentWidgets.value)
   })
 
-  project.value.widgets.push(nextWidget)
-  sortWidgets(project.value.widgets)
+  currentWidgets.value.push(nextWidget)
+  sortWidgets(currentWidgets.value)
   sanitizeSelection([nextWidget.id], nextWidget.id)
   statusMessage.value = `已添加组件：${nextWidget.name}`
 }
@@ -164,11 +500,11 @@ function addTemplate(templateId, position = {}) {
 
   const width = template.preview?.width ?? 180
   const height = template.preview?.height ?? 120
-  const nextX = clamp(position.x ?? 180, 0, Math.max(project.value.meta.screenWidth - width, 0))
-  const nextY = clamp(position.y ?? 180, 0, Math.max(project.value.meta.screenHeight - height, 0))
+  const nextX = clamp(position.x ?? 180, 0, Math.max(currentCanvas.value.meta.screenWidth - width, 0))
+  const nextY = clamp(position.y ?? 180, 0, Math.max(currentCanvas.value.meta.screenHeight - height, 0))
 
   queueHistoryLabel(template.widgets.length > 1 ? '添加组合模板' : '添加组件模板')
-  const createdWidgets = instantiateTemplate(project.value, template, {
+  const createdWidgets = instantiateTemplate(currentCanvas.value, template, {
     x: nextX,
     y: nextY
   })
@@ -178,8 +514,8 @@ function addTemplate(templateId, position = {}) {
     return
   }
 
-  project.value.widgets.push(...createdWidgets)
-  sortWidgets(project.value.widgets)
+  currentWidgets.value.push(...createdWidgets)
+  sortWidgets(currentWidgets.value)
   sanitizeSelection(
     createdWidgets.map((item) => item.id),
     createdWidgets.at(-1)?.id ?? null
@@ -221,7 +557,7 @@ function saveSelectionAsTemplate() {
   }
 
   const template = createTemplateFromSelection(
-    project.value,
+    currentCanvas.value,
     selectedIds.value,
     templateDraftName.value.trim() || buildDefaultTemplateName()
   )
@@ -237,7 +573,7 @@ function saveSelectionAsTemplate() {
 }
 
 function handleLayerSelection(payload) {
-  const relatedIds = expandIdsWithGroups([payload.widgetId], project.value.widgets)
+  const relatedIds = expandIdsWithGroups([payload.widgetId], currentWidgets.value)
 
   if (payload.additive) {
     toggleSelectionByIds(relatedIds, payload.widgetId)
@@ -248,7 +584,7 @@ function handleLayerSelection(payload) {
 }
 
 function setWidgetHidden(widgetId, hidden) {
-  const widget = project.value.widgets.find((item) => item.id === widgetId)
+  const widget = currentWidgets.value.find((item) => item.id === widgetId)
 
   if (!widget || widget.hidden === hidden) {
     return
@@ -260,7 +596,7 @@ function setWidgetHidden(widgetId, hidden) {
 }
 
 function toggleLayerHidden(widgetId) {
-  const widget = project.value.widgets.find((item) => item.id === widgetId)
+  const widget = currentWidgets.value.find((item) => item.id === widgetId)
 
   if (!widget) {
     return
@@ -270,7 +606,7 @@ function toggleLayerHidden(widgetId) {
 }
 
 function setWidgetLocked(widgetId, locked) {
-  const widget = project.value.widgets.find((item) => item.id === widgetId)
+  const widget = currentWidgets.value.find((item) => item.id === widgetId)
 
   if (!widget || widget.locked === locked) {
     return
@@ -282,7 +618,7 @@ function setWidgetLocked(widgetId, locked) {
 }
 
 function toggleLayerLocked(widgetId) {
-  const widget = project.value.widgets.find((item) => item.id === widgetId)
+  const widget = currentWidgets.value.find((item) => item.id === widgetId)
 
   if (!widget) {
     return
@@ -293,7 +629,7 @@ function toggleLayerLocked(widgetId) {
 
 function setSelectedHidden(hidden) {
   const ids = getExpandedSelectedIds()
-  const targets = project.value.widgets.filter((item) => ids.includes(item.id) && item.hidden !== hidden)
+  const targets = currentWidgets.value.filter((item) => ids.includes(item.id) && item.hidden !== hidden)
 
   if (!targets.length) {
     return
@@ -308,7 +644,7 @@ function setSelectedHidden(hidden) {
 
 function setSelectedLocked(locked) {
   const ids = getExpandedSelectedIds()
-  const targets = project.value.widgets.filter((item) => ids.includes(item.id) && item.locked !== locked)
+  const targets = currentWidgets.value.filter((item) => ids.includes(item.id) && item.locked !== locked)
 
   if (!targets.length) {
     return
@@ -322,7 +658,7 @@ function setSelectedLocked(locked) {
 }
 
 function reorderLayers(payload) {
-  const ordered = [...project.value.widgets].sort((a, b) => b.zIndex - a.zIndex)
+  const ordered = [...currentWidgets.value].sort((a, b) => b.zIndex - a.zIndex)
   const draggedIndex = ordered.findIndex((item) => item.id === payload.draggedId)
 
   if (draggedIndex === -1) {
@@ -348,7 +684,7 @@ function reorderLayers(payload) {
     widget.zIndex = total - index
   })
 
-  sortWidgets(project.value.widgets)
+  sortWidgets(currentWidgets.value)
   statusMessage.value = `已调整图层顺序：${dragged.name}`
 }
 
@@ -361,8 +697,7 @@ function deleteSelected() {
 
   queueHistoryLabel('删除组件')
   const deleteSet = new Set(expandedIds)
-
-  project.value.widgets = project.value.widgets.filter((item) => !deleteSet.has(item.id))
+  currentPage.value.widgets = currentPage.value.widgets.filter((item) => !deleteSet.has(item.id))
   sanitizeSelection([], null)
   statusMessage.value = `已删除 ${expandedIds.length} 个组件`
 }
@@ -373,7 +708,7 @@ function duplicateSelected() {
   }
 
   queueHistoryLabel('复制组件')
-  const duplicates = duplicateWidgets(project.value, selectedIds.value)
+  const duplicates = duplicateWidgets(currentCanvas.value, selectedIds.value)
 
   if (!duplicates.length) {
     clearQueuedHistoryLabel()
@@ -394,13 +729,13 @@ function bringToFront() {
 
   queueHistoryLabel('上移图层')
   const orderedSelection = [...selectedWidgets.value].sort((a, b) => a.zIndex - b.zIndex)
-  const nextBase = getNextZIndex(project.value.widgets)
+  const nextBase = getNextZIndex(currentWidgets.value)
 
   orderedSelection.forEach((widget, index) => {
     widget.zIndex = nextBase + index
   })
 
-  sortWidgets(project.value.widgets)
+  sortWidgets(currentWidgets.value)
   statusMessage.value = '已上移所选图层'
 }
 
@@ -411,14 +746,14 @@ function sendToBack() {
 
   queueHistoryLabel('下移图层')
   const orderedSelection = [...selectedWidgets.value].sort((a, b) => a.zIndex - b.zIndex)
-  const minZIndex = Math.min(...project.value.widgets.map((item) => item.zIndex || 0))
+  const minZIndex = Math.min(...currentWidgets.value.map((item) => item.zIndex || 0))
   const start = minZIndex - orderedSelection.length
 
   orderedSelection.forEach((widget, index) => {
     widget.zIndex = start + index
   })
 
-  sortWidgets(project.value.widgets)
+  sortWidgets(currentWidgets.value)
   statusMessage.value = '已下移所选图层'
 }
 
@@ -428,7 +763,7 @@ function groupSelected() {
   }
 
   queueHistoryLabel('编组组件')
-  const groupId = createWidgetGroup(project.value, selectedIds.value)
+  const groupId = createWidgetGroup(currentCanvas.value, selectedIds.value)
 
   if (!groupId) {
     clearQueuedHistoryLabel()
@@ -444,7 +779,7 @@ function ungroupSelected() {
   }
 
   queueHistoryLabel('取消编组')
-  const count = removeWidgetGroup(project.value, selectedIds.value)
+  const count = removeWidgetGroup(currentCanvas.value, selectedIds.value)
 
   if (!count) {
     clearQueuedHistoryLabel()
@@ -458,10 +793,8 @@ function resetProject() {
   queueHistoryLabel('恢复示例项目')
   project.value = createDemoProject()
   previewMode.value = false
-  sanitizeSelection(
-    project.value.widgets[0]?.id ? [project.value.widgets[0].id] : [],
-    project.value.widgets[0]?.id ?? null
-  )
+  clearLinkedWidgetState()
+  selectDefaultWidget(currentPage.value)
   statusMessage.value = '已恢复示例项目'
 }
 
@@ -491,10 +824,9 @@ function applyImport() {
     queueHistoryLabel('导入项目')
     project.value = nextProject
     dialogMode.value = null
-    sanitizeSelection(
-      project.value.widgets[0]?.id ? [project.value.widgets[0].id] : [],
-      project.value.widgets[0]?.id ?? null
-    )
+    previewMode.value = false
+    clearLinkedWidgetState()
+    selectDefaultWidget(currentPage.value)
     statusMessage.value = '项目 JSON 已导入'
   } catch (error) {
     statusMessage.value = '导入失败，请检查 JSON 结构'
@@ -523,8 +855,19 @@ function pushUndoEntry(entry) {
 async function restoreHistoryEntry(entry) {
   isRestoringHistory.value = true
   project.value = normalizeProjectSchema(JSON.parse(entry.snapshot))
+  clearLinkedWidgetState()
   await nextTick()
-  sanitizeSelection(selectedIds.value, primarySelectedId.value)
+
+  if (previewMode.value) {
+    sanitizeSelection([], null)
+  } else {
+    sanitizeSelection(selectedIds.value, primarySelectedId.value)
+
+    if (!selectedIds.value.length) {
+      selectDefaultWidget(currentPage.value)
+    }
+  }
+
   currentHistoryLabel.value = entry.label
   pendingHistoryLabel.value = null
   activeHistoryLabel.value = null
@@ -567,9 +910,9 @@ function moveSelectionBy(deltaX, deltaY) {
 
   queueHistoryLabel('移动组件')
   const minDeltaX = -movableBounds.x
-  const maxDeltaX = project.value.meta.screenWidth - (movableBounds.x + movableBounds.w)
+  const maxDeltaX = currentCanvas.value.meta.screenWidth - (movableBounds.x + movableBounds.w)
   const minDeltaY = -movableBounds.y
-  const maxDeltaY = project.value.meta.screenHeight - (movableBounds.y + movableBounds.h)
+  const maxDeltaY = currentCanvas.value.meta.screenHeight - (movableBounds.y + movableBounds.h)
   const nextDeltaX = clamp(deltaX, minDeltaX, maxDeltaX)
   const nextDeltaY = clamp(deltaY, minDeltaY, maxDeltaY)
 
@@ -577,6 +920,59 @@ function moveSelectionBy(deltaX, deltaY) {
     widget.x += nextDeltaX
     widget.y += nextDeltaY
   })
+}
+
+function handleWidgetAction(widgetId) {
+  if (!previewMode.value) {
+    return
+  }
+
+  const widget = currentWidgets.value.find((item) => item.id === widgetId)
+
+  if (!widget) {
+    return
+  }
+
+  const interaction = widget.interaction ?? { clickAction: 'none' }
+
+  switch (interaction.clickAction) {
+    case 'highlight-widgets': {
+      const targetIds = interaction.targetWidgetIds ?? []
+      flashLinkedWidgets(targetIds)
+
+      if (targetIds.length) {
+        statusMessage.value = `已联动高亮 ${targetIds.length} 个组件`
+      }
+      break
+    }
+    case 'refresh-sources': {
+      const fallbackSourceId = widget.dataBinding?.sourceId
+      const targetSourceIds = interaction.targetSourceIds?.length
+        ? interaction.targetSourceIds
+        : fallbackSourceId
+          ? [fallbackSourceId]
+          : []
+
+      let refreshCount = 0
+      targetSourceIds.forEach((sourceId) => {
+        if (refreshDataSource(sourceId, { silent: true })) {
+          refreshCount += 1
+        }
+      })
+
+      if (refreshCount > 0) {
+        statusMessage.value = `已联动刷新 ${refreshCount} 个数据源`
+      }
+      break
+    }
+    case 'switch-page':
+      if (interaction.targetPageId) {
+        switchPage(interaction.targetPageId, { previewNavigation: true })
+      }
+      break
+    default:
+      break
+  }
 }
 
 function handleKeydown(event) {
@@ -593,6 +989,13 @@ function handleKeydown(event) {
     target instanceof HTMLElement &&
     (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
   ) {
+    return
+  }
+
+  if (previewMode.value) {
+    if (event.key === 'Escape') {
+      previewMode.value = false
+    }
     return
   }
 
@@ -668,10 +1071,6 @@ function handleKeydown(event) {
   }
 }
 
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max)
-}
-
 watch(
   () => JSON.stringify(project.value),
   (nextSnapshot, previousSnapshot) => {
@@ -707,6 +1106,15 @@ watch(
 )
 
 watch(
+  () => JSON.stringify(project.value.dataSources),
+  () => {
+    syncDataSourceRuntime()
+    syncSourceRefreshTimers()
+  },
+  { immediate: true }
+)
+
+watch(
   () => JSON.stringify(templates.value),
   (nextSnapshot) => {
     if (typeof localStorage !== 'undefined') {
@@ -716,12 +1124,28 @@ watch(
   { immediate: true }
 )
 
+watch(previewMode, (enabled) => {
+  clearLinkedWidgetState()
+  syncSourceRefreshTimers()
+
+  if (enabled) {
+    sanitizeSelection([], null)
+    refreshAllDataSources({ silent: true })
+    statusMessage.value = '已进入预览模式'
+  } else {
+    selectDefaultWidget(currentPage.value)
+    statusMessage.value = '已退出预览模式'
+  }
+})
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown)
+  clearSourceRefreshTimers()
+  clearLinkedWidgetState()
 })
 </script>
 
@@ -729,6 +1153,8 @@ onBeforeUnmount(() => {
   <div class="app-shell" :class="{ 'app-shell--preview': previewMode }">
     <TopToolbar
       :preview-mode="previewMode"
+      :pages="project.pages"
+      :active-page-id="project.activePageId"
       :can-operate="canOperate"
       :selection-count="selectedIds.length"
       :can-group="canGroup"
@@ -736,7 +1162,9 @@ onBeforeUnmount(() => {
       :can-undo="canUndo"
       :can-redo="canRedo"
       :can-save-template="canSaveTemplate"
+      :has-data-sources="hasDataSources"
       @toggle-preview="previewMode = !previewMode"
+      @select-page="switchPage"
       @reset-project="resetProject"
       @export-project="openExportDialog"
       @import-project="openImportDialog"
@@ -747,6 +1175,7 @@ onBeforeUnmount(() => {
       @group-selected="groupSelected"
       @ungroup-selected="ungroupSelected"
       @save-selection-template="openTemplateDialog"
+      @refresh-data-sources="refreshAllDataSources"
       @undo="undoProject"
       @redo="redoProject"
     />
@@ -754,28 +1183,41 @@ onBeforeUnmount(() => {
     <section class="workspace">
       <MaterialPanel
         v-if="!previewMode"
+        :pages="project.pages"
+        :active-page-id="project.activePageId"
+        :can-delete-page="canDeletePage"
         :materials="materials"
         :templates="templates"
+        @select-page="switchPage"
+        @create-page="createPage"
+        @duplicate-page="duplicatePage"
+        @delete-page="deletePage"
         @add-widget="addWidget"
         @add-template="addTemplate"
         @remove-template="removeTemplate"
       />
 
       <StageCanvas
-        :project="project"
+        :project="currentCanvas"
         :selected-ids="selectedIds"
         :primary-selected-id="primarySelectedId"
         :preview-mode="previewMode"
+        :linked-widget-ids="linkedWidgetIds"
+        :data-source-runtime="dataSourceRuntime"
         @selection-change="updateSelection"
         @add-widget="addWidget"
         @add-template="addTemplate"
         @history-session-start="startHistorySession"
         @history-session-end="endHistorySession"
+        @trigger-widget-action="handleWidgetAction"
       />
 
       <InspectorPanel
         v-if="!previewMode"
-        :project="project"
+        :page="currentPage"
+        :project="currentCanvas"
+        :pages="project.pages"
+        :current-page-id="project.activePageId"
         :selected-widget="selectedWidget"
         :selected-widgets="selectedWidgets"
         :selected-bounds="selectedBounds"
@@ -786,12 +1228,20 @@ onBeforeUnmount(() => {
         :redo-entries="redoStack"
         :can-undo="canUndo"
         :can-redo="canRedo"
+        :data-source-runtime="dataSourceRuntime"
+        :source-binding-counts="sourceBindingCounts"
         @select-layer="handleLayerSelection"
         @toggle-layer-hidden="toggleLayerHidden"
         @toggle-layer-locked="toggleLayerLocked"
         @reorder-layer="reorderLayers"
         @set-selected-hidden="setSelectedHidden"
         @set-selected-locked="setSelectedLocked"
+        @create-source="createSource"
+        @delete-source="deleteSource"
+        @refresh-source="refreshDataSource"
+        @refresh-all-sources="refreshAllDataSources"
+        @change-source-type="changeSourceType"
+        @update-source-payload="updateSourcePayload"
         @undo="undoProject"
         @redo="redoProject"
       />
@@ -799,7 +1249,7 @@ onBeforeUnmount(() => {
 
     <footer class="status-bar">
       <span>{{ statusMessage }}</span>
-      <span>Ctrl/Cmd + Z 撤销，Ctrl/Cmd + Shift + Z 重做，Ctrl/Cmd + G 编组</span>
+      <span>当前页面：{{ currentPage?.name || '未命名页面' }}，预览模式下可点击组件触发联动。</span>
     </footer>
 
     <div v-if="dialogMode" class="dialog-mask" @click.self="closeDialog">
@@ -820,7 +1270,7 @@ onBeforeUnmount(() => {
 
           <div class="dialog-card__summary">
             <span>已选组件</span>
-            <strong>{{ selectedWidgets.length }} 个</strong>
+            <strong>{{ selectedWidgets.length }} 项</strong>
           </div>
 
           <div class="inspector-tag-list">

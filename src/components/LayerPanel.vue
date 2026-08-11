@@ -142,7 +142,7 @@ function isDropAfter(widgetId) {
             draggable="false"
             @click.stop="$emit('toggle-layer-hidden', widget.id)"
           >
-            {{ widget.hidden ? '显' : '隐' }}
+            {{ widget.hidden ? '显' : '藏' }}
           </button>
           <button
             class="layer-item__action"

@@ -1,4 +1,5 @@
 import { cloneWidget, createWidget } from './materials'
+import { createDataSource, normalizeDataSource } from './dataSources'
 
 export const STORAGE_KEY = 'visualization-web-project-v1'
 export const TEMPLATE_STORAGE_KEY = 'visualization-web-templates-v1'
@@ -13,7 +14,16 @@ const createTemplateId = () =>
   globalThis.crypto?.randomUUID?.() ??
   `template-${Date.now()}-${Math.random().toString(16).slice(2)}`
 
-export const defaultMeta = {
+const createPageId = () =>
+  globalThis.crypto?.randomUUID?.() ??
+  `page-${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+const toFiniteNumber = (value, fallback) => {
+  const nextValue = Number(value)
+  return Number.isFinite(nextValue) ? nextValue : fallback
+}
+
+export const defaultPageMeta = {
   title: 'Vue3 大屏低代码平台',
   screenWidth: 1920,
   screenHeight: 1080,
@@ -23,91 +33,42 @@ export const defaultMeta = {
   showGrid: true
 }
 
-export function createDemoProject() {
+function normalizeDataBinding(binding) {
   return {
-    meta: cloneDeep(defaultMeta),
-    widgets: [
-      createWidget('text', {
-        x: 88,
-        y: 48,
-        w: 620,
-        h: 86,
-        zIndex: 1,
-        props: {
-          text: '城市运行智能指挥中心',
-          fontSize: 46
-        }
-      }),
-      createWidget('panel', {
-        x: 72,
-        y: 154,
-        w: 540,
-        h: 320,
-        zIndex: 2,
-        props: {
-          title: '左侧概览',
-          subtitle: '承载业务摘要、分析结论和筛选说明',
-          content: '通过拖拽或点击左侧物料，可以快速组合文本、图表和指标卡，属性面板支持直接调整样式、尺寸和数据。'
-        }
-      }),
-      createWidget('stat', {
-        x: 648,
-        y: 154,
-        zIndex: 3,
-        props: {
-          title: '活跃设备',
-          value: 28640,
-          unit: '台',
-          trend: 8.2
-        }
-      }),
-      createWidget('stat', {
-        x: 1020,
-        y: 154,
-        zIndex: 4,
-        props: {
-          title: '今日告警',
-          value: 312,
-          unit: '次',
-          trend: -5.8,
-          color: '#ffd66b',
-          accent: '#ff8a72'
-        }
-      }),
-      createWidget('gauge', {
-        x: 1418,
-        y: 144,
-        zIndex: 5
-      }),
-      createWidget('barChart', {
-        x: 648,
-        y: 386,
-        zIndex: 6
-      }),
-      createWidget('lineChart', {
-        x: 1200,
-        y: 386,
-        zIndex: 7
-      })
-    ]
+    sourceId: typeof binding?.sourceId === 'string' ? binding.sourceId : ''
   }
 }
 
-export function normalizeProjectSchema(rawProject) {
-  if (!rawProject || typeof rawProject !== 'object') {
-    throw new Error('项目 JSON 不合法')
+function normalizeInteraction(interaction) {
+  return {
+    clickAction: typeof interaction?.clickAction === 'string' ? interaction.clickAction : 'none',
+    targetWidgetIds: Array.isArray(interaction?.targetWidgetIds)
+      ? interaction.targetWidgetIds.filter((item) => typeof item === 'string')
+      : [],
+    targetSourceIds: Array.isArray(interaction?.targetSourceIds)
+      ? interaction.targetSourceIds.filter((item) => typeof item === 'string')
+      : [],
+    targetPageId: typeof interaction?.targetPageId === 'string' ? interaction.targetPageId : ''
   }
+}
 
-  const widgets = Array.isArray(rawProject.widgets)
-    ? rawProject.widgets.map((widget, index) => normalizeWidget(widget, index))
-    : []
+function remapInteractionTargets(interaction, widgetIdMap, options = {}) {
+  const normalized = normalizeInteraction(interaction)
+  const dropMissing = Boolean(options.dropMissing)
+  const pageIdMap = options.pageIdMap ?? new Map()
 
   return {
-    meta: {
-      ...cloneDeep(defaultMeta),
-      ...(rawProject.meta ?? {})
-    },
-    widgets
+    ...normalized,
+    targetWidgetIds: normalized.targetWidgetIds
+      .map((targetId) => {
+        if (widgetIdMap.has(targetId)) {
+          return widgetIdMap.get(targetId)
+        }
+
+        return dropMissing ? null : targetId
+      })
+      .filter(Boolean),
+    targetPageId: pageIdMap.get(normalized.targetPageId) ?? normalized.targetPageId
   }
 }
 
@@ -121,11 +82,411 @@ function normalizeWidget(widget, index) {
     groupId: widget?.groupId || null,
     locked: Boolean(widget?.locked),
     hidden: Boolean(widget?.hidden),
-    x: Number(widget?.x ?? normalized.x),
-    y: Number(widget?.y ?? normalized.y),
-    w: Math.max(100, Number(widget?.w ?? normalized.w)),
-    h: Math.max(60, Number(widget?.h ?? normalized.h)),
-    zIndex: Number.isFinite(Number(widget?.zIndex)) ? Number(widget.zIndex) : index + 1
+    dataBinding: normalizeDataBinding(widget?.dataBinding),
+    interaction: normalizeInteraction(widget?.interaction),
+    x: toFiniteNumber(widget?.x, normalized.x),
+    y: toFiniteNumber(widget?.y, normalized.y),
+    w: Math.max(100, toFiniteNumber(widget?.w, normalized.w)),
+    h: Math.max(60, toFiniteNumber(widget?.h, normalized.h)),
+    zIndex: toFiniteNumber(widget?.zIndex, index + 1)
+  }
+}
+
+export function createProjectPage(name = '新页面', options = {}) {
+  const widgets = Array.isArray(options.widgets)
+    ? options.widgets.map((widget, index) => normalizeWidget(widget, index))
+    : []
+
+  widgets.sort((a, b) => a.zIndex - b.zIndex)
+
+  return {
+    id: options.id ?? createPageId(),
+    name,
+    meta: {
+      ...cloneDeep(defaultPageMeta),
+      ...(options.meta ?? {})
+    },
+    widgets
+  }
+}
+
+export function duplicateProjectPage(page, nextName = `${page.name} 副本`) {
+  const duplicatedPageId = createPageId()
+  const groupMap = new Map()
+  const sources = [...page.widgets].sort((a, b) => a.zIndex - b.zIndex)
+  const widgets = sources.map((widget) => {
+    let nextGroupId = null
+
+    if (widget.groupId) {
+      if (!groupMap.has(widget.groupId)) {
+        groupMap.set(widget.groupId, createGroupId())
+      }
+
+      nextGroupId = groupMap.get(widget.groupId)
+    }
+
+    return cloneWidget(widget, {
+      groupId: nextGroupId
+    })
+  })
+
+  const widgetIdMap = new Map(sources.map((widget, index) => [widget.id, widgets[index].id]))
+  const pageIdMap = new Map([[page.id, duplicatedPageId]])
+
+  widgets.forEach((widget) => {
+    widget.interaction = remapInteractionTargets(widget.interaction, widgetIdMap, {
+      pageIdMap
+    })
+  })
+
+  return createProjectPage(nextName, {
+    id: duplicatedPageId,
+    meta: cloneDeep(page.meta),
+    widgets
+  })
+}
+
+function normalizePage(page, index, sourceIds) {
+  const nextPage = createProjectPage(page?.name || `页面 ${index + 1}`, {
+    id: page?.id,
+    meta: page?.meta ?? {},
+    widgets: Array.isArray(page?.widgets) ? page.widgets : []
+  })
+
+  nextPage.widgets.forEach((widget) => {
+    if (widget.dataBinding.sourceId && !sourceIds.has(widget.dataBinding.sourceId)) {
+      widget.dataBinding.sourceId = ''
+    }
+  })
+
+  return nextPage
+}
+
+export function createDemoProject() {
+  const titleSource = createDataSource('text', {
+    name: '大屏标题',
+    generator: 'headlineFlash',
+    refreshInterval: 30,
+    payload: {
+      text: '城市运行智能指挥中心'
+    }
+  })
+
+  const overviewSource = createDataSource('panel', {
+    name: '左侧概览',
+    generator: 'panelDigest',
+    refreshInterval: 60,
+    payload: {
+      title: '左侧概览',
+      subtitle: '承载业务摘要、分析结论和筛选说明',
+      content: '通过拖拽或点击左侧物料，可以快速组合文本、图表和指标卡。'
+    }
+  })
+
+  const activeDevicesSource = createDataSource('stat', {
+    name: '活跃设备',
+    generator: 'statPulse',
+    refreshInterval: 20,
+    payload: {
+      title: '活跃设备',
+      value: 28640,
+      unit: '台',
+      trend: 8.2,
+      trendLabel: '较昨日',
+      color: '#44e6ff',
+      accent: '#84ffbf'
+    }
+  })
+
+  const alertSource = createDataSource('stat', {
+    name: '今日告警',
+    generator: 'statPulse',
+    refreshInterval: 25,
+    payload: {
+      title: '今日告警',
+      value: 312,
+      unit: '次',
+      trend: -5.8,
+      trendLabel: '较昨日',
+      color: '#ffd66b',
+      accent: '#ff8a72'
+    }
+  })
+
+  const gaugeSource = createDataSource('gauge', {
+    name: '在线率',
+    generator: 'gaugePulse',
+    refreshInterval: 15,
+    payload: {
+      title: '设备在线率',
+      value: 86,
+      color: '#5affbd',
+      trackColor: 'rgba(255, 255, 255, 0.12)'
+    }
+  })
+
+  const barSource = createDataSource('barChart', {
+    name: '渠道流量',
+    generator: 'barPulse',
+    refreshInterval: 35,
+    payload: {
+      title: '渠道流量',
+      categories: ['App', '小程序', '官网', '门店', '其他'],
+      values: [92, 76, 54, 39, 22],
+      color: '#46eeff'
+    }
+  })
+
+  const lineSource = createDataSource('lineChart', {
+    name: '告警趋势',
+    generator: 'linePulse',
+    refreshInterval: 20,
+    payload: {
+      title: '近七日告警趋势',
+      labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+      values: [14, 28, 19, 33, 48, 30, 22],
+      color: '#7bfecb',
+      areaColor: 'rgba(123, 254, 203, 0.18)'
+    }
+  })
+
+  const pageOne = createProjectPage('运营总览', {
+    meta: {
+      title: '城市运行智能指挥中心'
+    },
+    widgets: [
+      createWidget('text', {
+        x: 88,
+        y: 48,
+        w: 620,
+        h: 86,
+        zIndex: 1,
+        props: {
+          text: '城市运行智能指挥中心',
+          fontSize: 46
+        },
+        dataBinding: {
+          sourceId: titleSource.id
+        }
+      }),
+      createWidget('panel', {
+        x: 72,
+        y: 154,
+        w: 540,
+        h: 320,
+        zIndex: 2,
+        props: {
+          title: '左侧概览',
+          subtitle: '承载业务摘要、分析结论和筛选说明',
+          content: '通过拖拽或点击左侧物料，可以快速组合文本、图表和指标卡。'
+        },
+        dataBinding: {
+          sourceId: overviewSource.id
+        }
+      }),
+      createWidget('stat', {
+        x: 648,
+        y: 154,
+        zIndex: 3,
+        dataBinding: {
+          sourceId: activeDevicesSource.id
+        }
+      }),
+      createWidget('stat', {
+        x: 1020,
+        y: 154,
+        zIndex: 4,
+        props: {
+          title: '今日告警',
+          value: 312,
+          unit: '次',
+          trend: -5.8,
+          color: '#ffd66b',
+          accent: '#ff8a72'
+        },
+        dataBinding: {
+          sourceId: alertSource.id
+        }
+      }),
+      createWidget('gauge', {
+        x: 1418,
+        y: 144,
+        zIndex: 5,
+        dataBinding: {
+          sourceId: gaugeSource.id
+        }
+      }),
+      createWidget('barChart', {
+        x: 648,
+        y: 386,
+        zIndex: 6,
+        dataBinding: {
+          sourceId: barSource.id
+        }
+      }),
+      createWidget('lineChart', {
+        x: 1200,
+        y: 386,
+        zIndex: 7,
+        dataBinding: {
+          sourceId: lineSource.id
+        }
+      })
+    ]
+  })
+
+  const pageTwo = createProjectPage('趋势分析', {
+    meta: {
+      title: '趋势分析与预警总览',
+      background:
+        'radial-gradient(circle at 20% 20%, rgba(49, 137, 255, 0.22), transparent 32%), radial-gradient(circle at 80% 0%, rgba(90, 255, 189, 0.12), transparent 28%), linear-gradient(135deg, #06111f 0%, #07162a 46%, #02070d 100%)'
+    },
+    widgets: [
+      createWidget('text', {
+        x: 86,
+        y: 54,
+        w: 700,
+        h: 82,
+        zIndex: 1,
+        props: {
+          text: '趋势分析与预警总览',
+          fontSize: 44
+        }
+      }),
+      createWidget('panel', {
+        x: 72,
+        y: 166,
+        w: 420,
+        h: 280,
+        zIndex: 2,
+        props: {
+          title: '分析摘要',
+          subtitle: '按页面维度组合不同图表布局',
+          content: '同一套数据源可以被多个页面复用，用于运营总览、趋势分析和专题看板。'
+        },
+        dataBinding: {
+          sourceId: overviewSource.id
+        }
+      }),
+      createWidget('lineChart', {
+        x: 530,
+        y: 162,
+        w: 620,
+        h: 330,
+        zIndex: 3,
+        dataBinding: {
+          sourceId: lineSource.id
+        }
+      }),
+      createWidget('barChart', {
+        x: 1184,
+        y: 162,
+        w: 610,
+        h: 330,
+        zIndex: 4,
+        dataBinding: {
+          sourceId: barSource.id
+        }
+      }),
+      createWidget('stat', {
+        x: 530,
+        y: 530,
+        zIndex: 5,
+        dataBinding: {
+          sourceId: activeDevicesSource.id
+        }
+      }),
+      createWidget('stat', {
+        x: 900,
+        y: 530,
+        zIndex: 6,
+        dataBinding: {
+          sourceId: alertSource.id
+        }
+      }),
+      createWidget('gauge', {
+        x: 1328,
+        y: 514,
+        zIndex: 7,
+        dataBinding: {
+          sourceId: gaugeSource.id
+        }
+      })
+    ]
+  })
+
+  pageOne.widgets[2].interaction = {
+    clickAction: 'refresh-sources',
+    targetWidgetIds: [],
+    targetSourceIds: [activeDevicesSource.id, alertSource.id],
+    targetPageId: ''
+  }
+  pageOne.widgets[5].interaction = {
+    clickAction: 'highlight-widgets',
+    targetWidgetIds: [pageOne.widgets[4].id, pageOne.widgets[6].id],
+    targetSourceIds: [],
+    targetPageId: ''
+  }
+  pageOne.widgets[6].interaction = {
+    clickAction: 'switch-page',
+    targetWidgetIds: [],
+    targetSourceIds: [],
+    targetPageId: pageTwo.id
+  }
+  pageTwo.widgets[2].interaction = {
+    clickAction: 'highlight-widgets',
+    targetWidgetIds: [pageTwo.widgets[3].id, pageTwo.widgets[6].id],
+    targetSourceIds: [],
+    targetPageId: ''
+  }
+
+  return {
+    dataSources: [
+      titleSource,
+      overviewSource,
+      activeDevicesSource,
+      alertSource,
+      gaugeSource,
+      barSource,
+      lineSource
+    ],
+    pages: [pageOne, pageTwo],
+    activePageId: pageOne.id
+  }
+}
+
+export function normalizeProjectSchema(rawProject) {
+  if (!rawProject || typeof rawProject !== 'object') {
+    throw new Error('项目 JSON 不合法')
+  }
+
+  const dataSources = Array.isArray(rawProject.dataSources)
+    ? rawProject.dataSources.map((source, index) => normalizeDataSource(source, index))
+    : []
+  const sourceIds = new Set(dataSources.map((source) => source.id))
+
+  const pages = Array.isArray(rawProject.pages)
+    ? rawProject.pages.map((page, index) => normalizePage(page, index, sourceIds))
+    : [
+        normalizePage(
+          {
+            id: rawProject.pageId,
+            name: rawProject.pageName || rawProject.meta?.title || '页面 1',
+            meta: rawProject.meta ?? {},
+            widgets: rawProject.widgets ?? []
+          },
+          0,
+          sourceIds
+        )
+      ]
+
+  const safePages = pages.length ? pages : [createProjectPage('页面 1')]
+  const hasActivePage = safePages.some((page) => page.id === rawProject.activePageId)
+
+  return {
+    dataSources,
+    pages: safePages,
+    activePageId: hasActivePage ? rawProject.activePageId : safePages[0].id
   }
 }
 
@@ -198,6 +559,7 @@ export function duplicateWidgets(project, selectedIds) {
       if (!groupMap.has(widget.groupId)) {
         groupMap.set(widget.groupId, createGroupId())
       }
+
       nextGroupId = groupMap.get(widget.groupId)
     }
 
@@ -207,6 +569,12 @@ export function duplicateWidgets(project, selectedIds) {
       zIndex: nextZIndex + index,
       groupId: nextGroupId
     })
+  })
+
+  const widgetIdMap = new Map(sources.map((widget, index) => [widget.id, duplicates[index].id]))
+
+  duplicates.forEach((widget) => {
+    widget.interaction = remapInteractionTargets(widget.interaction, widgetIdMap)
   })
 
   project.widgets.push(...duplicates)
@@ -357,15 +725,16 @@ export function instantiateTemplate(project, template, position = {}) {
 
   const nextZIndex = getNextZIndex(project.widgets)
   const groupMap = new Map()
+  const sourceIds = new Set((project.dataSources ?? []).map((source) => source.id))
   const widgets = [...template.widgets].sort((a, b) => a.zIndex - b.zIndex)
-
-  return widgets.map((widget, index) => {
+  const createdWidgets = widgets.map((widget, index) => {
     let nextGroupId = null
 
     if (widget.groupId) {
       if (!groupMap.has(widget.groupId)) {
         groupMap.set(widget.groupId, createGroupId())
       }
+
       nextGroupId = groupMap.get(widget.groupId)
     }
 
@@ -374,8 +743,21 @@ export function instantiateTemplate(project, template, position = {}) {
       y: (position.y ?? 80) + widget.y,
       zIndex: nextZIndex + index,
       groupId: nextGroupId,
+      dataBinding: {
+        sourceId: sourceIds.has(widget.dataBinding?.sourceId) ? widget.dataBinding?.sourceId ?? '' : ''
+      },
       hidden: false,
       locked: false
     })
   })
+
+  const widgetIdMap = new Map(widgets.map((widget, index) => [widget.id, createdWidgets[index].id]))
+
+  createdWidgets.forEach((widget) => {
+    widget.interaction = remapInteractionTargets(widget.interaction, widgetIdMap, {
+      dropMissing: true
+    })
+  })
+
+  return createdWidgets
 }

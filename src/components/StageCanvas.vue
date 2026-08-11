@@ -21,6 +21,14 @@ const props = defineProps({
   previewMode: {
     type: Boolean,
     default: false
+  },
+  linkedWidgetIds: {
+    type: Array,
+    default: () => []
+  },
+  dataSourceRuntime: {
+    type: Object,
+    default: () => ({})
   }
 })
 
@@ -29,7 +37,8 @@ const emit = defineEmits([
   'add-widget',
   'add-template',
   'history-session-start',
-  'history-session-end'
+  'history-session-end',
+  'trigger-widget-action'
 ])
 
 const containerRef = ref(null)
@@ -51,6 +60,7 @@ const orderedWidgets = computed(() =>
     .sort((a, b) => a.zIndex - b.zIndex)
 )
 
+const linkedIdSet = computed(() => new Set(props.linkedWidgetIds))
 const selectedIdSet = computed(() => new Set(props.selectedIds))
 const currentPrimaryId = computed(() => props.primarySelectedId || props.selectedIds.at(-1) || null)
 const selectedBounds = computed(() =>
@@ -111,17 +121,24 @@ function updateScale() {
   scale.value = Math.max(0.25, Math.min(horizontal, vertical, 1))
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max)
+}
+
 function toStagePoint(event) {
+  if (!stageRef.value) {
+    return {
+      x: 0,
+      y: 0
+    }
+  }
+
   const stageBounds = stageRef.value.getBoundingClientRect()
 
   return {
     x: clamp((event.clientX - stageBounds.left) / scale.value, 0, props.project.meta.screenWidth),
     y: clamp((event.clientY - stageBounds.top) / scale.value, 0, props.project.meta.screenHeight)
   }
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max)
 }
 
 function parseDropSource(dataTransfer) {
@@ -149,6 +166,10 @@ function isSelected(widgetId) {
 
 function isPrimary(widgetId) {
   return currentPrimaryId.value === widgetId
+}
+
+function isLinkedActive(widgetId) {
+  return linkedIdSet.value.has(widgetId)
 }
 
 function emitSelection(ids, primaryId = null) {
@@ -184,6 +205,7 @@ function resolveToggleSelection(idsToToggle, primaryId) {
   }
 
   const ids = Array.from(selection)
+
   return {
     ids,
     primaryId: ids.includes(primaryId) ? primaryId : ids.at(-1) ?? null
@@ -214,6 +236,10 @@ function resolveSelectionForInteraction(widgetId, event) {
 function handleWidgetSelect(payload) {
   const selection = resolveSelectionForInteraction(payload.widgetId, payload.event)
   emitSelection(selection.ids, selection.primaryId)
+}
+
+function handleWidgetAction(payload) {
+  emit('trigger-widget-action', payload.widgetId)
 }
 
 function beginInteraction(payload, mode) {
@@ -274,9 +300,11 @@ function buildSnapTargets(ignoreIds) {
   const xTargets = [0, props.project.meta.screenWidth / 2, props.project.meta.screenWidth].map((value) => ({
     value
   }))
-  const yTargets = [0, props.project.meta.screenHeight / 2, props.project.meta.screenHeight].map((value) => ({
-    value
-  }))
+  const yTargets = [0, props.project.meta.screenHeight / 2, props.project.meta.screenHeight].map(
+    (value) => ({
+      value
+    })
+  )
 
   props.project.widgets.forEach((widget) => {
     if (ignored.has(widget.id) || widget.hidden) {
@@ -631,9 +659,12 @@ watch(
           :preview-mode="previewMode"
           :can-resize="selectedIds.length === 1 && isPrimary(widget.id) && !widget.locked"
           :can-move="!widget.locked"
+          :linked-active="isLinkedActive(widget.id)"
+          :data-source-runtime="dataSourceRuntime"
           @select="handleWidgetSelect"
           @drag-start="beginInteraction($event, 'move')"
           @resize-start="beginInteraction($event, 'resize')"
+          @trigger-action="handleWidgetAction"
         />
 
         <div

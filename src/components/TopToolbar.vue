@@ -4,6 +4,14 @@ defineProps({
     type: Boolean,
     default: false
   },
+  pages: {
+    type: Array,
+    default: () => []
+  },
+  activePageId: {
+    type: String,
+    default: ''
+  },
   canOperate: {
     type: Boolean,
     default: false
@@ -31,11 +39,16 @@ defineProps({
   canSaveTemplate: {
     type: Boolean,
     default: false
+  },
+  hasDataSources: {
+    type: Boolean,
+    default: false
   }
 })
 
 defineEmits([
   'toggle-preview',
+  'select-page',
   'reset-project',
   'export-project',
   'import-project',
@@ -46,6 +59,7 @@ defineEmits([
   'group-selected',
   'ungroup-selected',
   'save-selection-template',
+  'refresh-data-sources',
   'undo',
   'redo'
 ])
@@ -62,12 +76,24 @@ defineEmits([
     </div>
 
     <div class="toolbar__actions">
+      <label v-if="pages.length" class="toolbar__page-switch">
+        <span>页面</span>
+        <select :value="activePageId" @change="$emit('select-page', $event.target.value)">
+          <option v-for="page in pages" :key="page.id" :value="page.id">
+            {{ page.name }}
+          </option>
+        </select>
+      </label>
+
       <span v-if="selectionCount" class="toolbar__selection-chip">已选 {{ selectionCount }} 项</span>
       <button class="ghost" :disabled="!canUndo" @click="$emit('undo')">撤销</button>
       <button class="ghost" :disabled="!canRedo" @click="$emit('redo')">重做</button>
       <button class="ghost" @click="$emit('reset-project')">恢复示例</button>
       <button class="ghost" @click="$emit('import-project')">导入 JSON</button>
       <button class="ghost" @click="$emit('export-project')">导出 JSON</button>
+      <button class="ghost" :disabled="!hasDataSources" @click="$emit('refresh-data-sources')">
+        刷新数据
+      </button>
       <button class="ghost" :disabled="!canGroup" @click="$emit('group-selected')">编组</button>
       <button class="ghost" :disabled="!canUngroup" @click="$emit('ungroup-selected')">取消编组</button>
       <button class="ghost" :disabled="!canOperate" @click="$emit('send-to-back')">下移图层</button>

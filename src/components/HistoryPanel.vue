@@ -4,7 +4,7 @@ import { computed } from 'vue'
 const props = defineProps({
   currentLabel: {
     type: String,
-    default: '当前状态'
+    default: '当前项目'
   },
   undoEntries: {
     type: Array,

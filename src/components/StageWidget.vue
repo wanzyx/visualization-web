@@ -32,10 +32,18 @@ const props = defineProps({
   canMove: {
     type: Boolean,
     default: true
+  },
+  linkedActive: {
+    type: Boolean,
+    default: false
+  },
+  dataSourceRuntime: {
+    type: Object,
+    default: () => ({})
   }
 })
 
-const emit = defineEmits(['select', 'drag-start', 'resize-start'])
+const emit = defineEmits(['select', 'drag-start', 'resize-start', 'trigger-action'])
 
 const componentMap = {
   text: TextWidget,
@@ -64,6 +72,43 @@ const frameStyle = computed(() => ({
 }))
 
 const renderer = computed(() => componentMap[props.widget.type] || PanelWidget)
+const clickAction = computed(() => props.widget.interaction?.clickAction ?? 'none')
+const interactive = computed(() => props.previewMode && clickAction.value !== 'none')
+
+const interactionLabel = computed(() => {
+  switch (clickAction.value) {
+    case 'highlight-widgets':
+      return '联动高亮'
+    case 'refresh-sources':
+      return '刷新数据'
+    case 'switch-page':
+      return '切换页面'
+    default:
+      return ''
+  }
+})
+
+const displayWidget = computed(() => {
+  const sourceId = props.widget.dataBinding?.sourceId
+
+  if (!sourceId) {
+    return props.widget
+  }
+
+  const runtimePayload = props.dataSourceRuntime[sourceId]?.payload
+
+  if (!runtimePayload) {
+    return props.widget
+  }
+
+  return {
+    ...props.widget,
+    props: {
+      ...props.widget.props,
+      ...runtimePayload
+    }
+  }
+})
 
 function handleSelect(event) {
   if (props.previewMode) {
@@ -97,6 +142,25 @@ function handleResizeStart(event) {
     event
   })
 }
+
+function handleFramePointerDown(event) {
+  if (props.previewMode) {
+    if (event.button === 0 && clickAction.value !== 'none') {
+      emit('trigger-action', {
+        widgetId: props.widget.id,
+        event
+      })
+    }
+    return
+  }
+
+  if (props.canMove) {
+    handleDragStart(event)
+    return
+  }
+
+  handleSelect(event)
+}
 </script>
 
 <template>
@@ -106,19 +170,28 @@ function handleResizeStart(event) {
       'is-selected': selected,
       'is-primary': primarySelected,
       'is-grouped': Boolean(widget.groupId),
-      'is-locked': widget.locked
+      'is-locked': widget.locked,
+      'is-linked-active': linkedActive,
+      'is-interactive': interactive
     }"
     :style="widgetStyle"
   >
     <div
       class="stage-widget__frame"
       :style="frameStyle"
-      @pointerdown.stop.prevent="canMove ? handleDragStart($event) : handleSelect($event)"
+      @pointerdown.stop.prevent="handleFramePointerDown"
     >
-      <component :is="renderer" :widget="widget" />
+      <component :is="renderer" :widget="displayWidget" />
       <span v-if="!previewMode" class="stage-widget__name">{{ widget.name }}</span>
       <span v-if="widget.groupId && !previewMode" class="stage-widget__group-badge">G</span>
       <span v-if="widget.locked && !previewMode" class="stage-widget__lock-badge">锁定</span>
+      <span v-if="widget.dataBinding?.sourceId && !previewMode" class="stage-widget__data-badge">数据</span>
+      <span
+        v-if="interactionLabel && !previewMode"
+        class="stage-widget__action-badge"
+      >
+        {{ interactionLabel }}
+      </span>
       <button
         v-if="canResize && !previewMode"
         class="stage-widget__resize-handle"

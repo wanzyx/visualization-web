@@ -129,6 +129,27 @@ button {
   gap: 10px;
 }
 
+.toolbar__page-switch {
+  display: grid;
+  gap: 4px;
+  min-width: 180px;
+}
+
+.toolbar__page-switch span {
+  color: var(--text-2);
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+.toolbar__page-switch select {
+  min-height: 40px;
+  border: 1px solid rgba(72, 220, 255, 0.18);
+  border-radius: 14px;
+  background: rgba(9, 21, 40, 0.82);
+  color: var(--text-1);
+  padding: 0 12px;
+}
+
 .toolbar__selection-chip {
   display: inline-flex;
   align-items: center;
@@ -242,6 +263,68 @@ button:disabled {
 .material-section__header span {
   color: var(--text-2);
   font-size: 12px;
+}
+
+.page-panel__create {
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+.page-list {
+  display: grid;
+  gap: 10px;
+}
+
+.page-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 18px;
+  background: rgba(4, 12, 22, 0.56);
+}
+
+.page-card.is-active {
+  border-color: rgba(72, 220, 255, 0.3);
+  box-shadow: 0 0 0 1px rgba(72, 220, 255, 0.12);
+}
+
+.page-card__select {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.page-card__meta {
+  display: grid;
+  gap: 4px;
+}
+
+.page-card__name {
+  font-size: 14px;
+}
+
+.page-card__subline {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.page-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.page-card__action {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(72, 220, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(9, 21, 40, 0.82);
+  color: var(--text-1);
 }
 
 .material-card {
@@ -396,6 +479,10 @@ button:disabled {
   backdrop-filter: blur(12px);
 }
 
+.stage-widget.is-interactive .stage-widget__frame {
+  cursor: pointer;
+}
+
 .stage-widget.is-selected .stage-widget__frame {
   border-color: rgba(78, 229, 255, 0.88);
   box-shadow:
@@ -420,6 +507,14 @@ button:disabled {
 
 .stage-widget.is-locked .stage-widget__frame {
   box-shadow: inset 0 0 0 1px rgba(255, 214, 107, 0.22);
+}
+
+.stage-widget.is-linked-active .stage-widget__frame {
+  border-color: rgba(121, 255, 179, 0.92);
+  box-shadow:
+    0 0 0 1px rgba(121, 255, 179, 0.42),
+    0 0 36px rgba(121, 255, 179, 0.24);
+  animation: linkedPulse 1.6s ease;
 }
 
 .stage-widget__name {
@@ -460,6 +555,36 @@ button:disabled {
   border-radius: 999px;
   background: rgba(255, 214, 107, 0.16);
   color: #ffe6a5;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.stage-widget__data-badge {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(72, 220, 255, 0.16);
+  color: #d7fbff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.stage-widget__action-badge {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(121, 255, 179, 0.16);
+  color: #d5ffe8;
   font-size: 11px;
   font-weight: 700;
 }
@@ -697,6 +822,18 @@ button:disabled {
   font-size: 16px;
 }
 
+.inspector-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inspector-inline-button {
+  min-height: 32px;
+  padding: 0 12px;
+}
+
 .inspector-group label {
   display: grid;
   gap: 8px;
@@ -765,10 +902,43 @@ button:disabled {
   line-height: 1.7;
 }
 
+.inspector-caption {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .inspector-tag-list {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.inspector-choice-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.inspector-choice-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(72, 220, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(9, 21, 40, 0.7);
+  color: var(--text-2);
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.inspector-choice-button.is-active {
+  border-color: rgba(121, 255, 179, 0.34);
+  background: rgba(121, 255, 179, 0.12);
+  color: var(--text-1);
+  box-shadow: 0 0 0 1px rgba(121, 255, 179, 0.12);
 }
 
 .inspector-action-grid {
@@ -786,6 +956,33 @@ button:disabled {
   border-radius: 999px;
   background: rgba(9, 21, 40, 0.7);
   color: var(--text-1);
+  font-size: 12px;
+}
+
+.binding-preview {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  background: rgba(4, 12, 22, 0.56);
+}
+
+.binding-preview span {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.binding-preview strong {
+  font-size: 16px;
+}
+
+.inspector-empty {
+  padding: 12px 14px;
+  border: 1px dashed rgba(79, 227, 255, 0.18);
+  border-radius: 16px;
+  background: rgba(8, 19, 34, 0.52);
+  color: var(--text-2);
   font-size: 12px;
 }
 
@@ -958,6 +1155,47 @@ button:disabled {
   color: var(--text-2);
 }
 
+.data-source-panel__toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.data-source-panel__list {
+  display: grid;
+  gap: 12px;
+}
+
+.data-source-panel__card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 18px;
+  background: rgba(4, 12, 22, 0.52);
+}
+
+.data-source-panel__meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 12px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.data-source-panel__textarea {
+  min-height: 150px;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 12px;
+}
+
+.data-source-panel__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .status-bar {
   display: flex;
   align-items: center;
@@ -1067,6 +1305,26 @@ button:disabled {
   justify-content: flex-end;
 }
 
+@keyframes linkedPulse {
+  0% {
+    box-shadow:
+      0 0 0 1px rgba(121, 255, 179, 0.22),
+      0 0 0 rgba(121, 255, 179, 0.12);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(121, 255, 179, 0.48),
+      0 0 42px rgba(121, 255, 179, 0.28);
+  }
+
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(121, 255, 179, 0.42),
+      0 0 36px rgba(121, 255, 179, 0.24);
+  }
+}
+
 @media (max-width: 1280px) {
   body {
     overflow: auto;
@@ -1089,5 +1347,9 @@ button:disabled {
   .status-bar {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .toolbar__page-switch {
+    min-width: 100%;
   }
 }

@@ -1,5 +1,19 @@
 <script setup>
+import PagePanel from './PagePanel.vue'
+
 defineProps({
+  pages: {
+    type: Array,
+    default: () => []
+  },
+  activePageId: {
+    type: String,
+    default: ''
+  },
+  canDeletePage: {
+    type: Boolean,
+    default: false
+  },
   materials: {
     type: Array,
     required: true
@@ -10,7 +24,15 @@ defineProps({
   }
 })
 
-const emit = defineEmits(['add-widget', 'add-template', 'remove-template'])
+const emit = defineEmits([
+  'select-page',
+  'create-page',
+  'duplicate-page',
+  'delete-page',
+  'add-widget',
+  'add-template',
+  'remove-template'
+])
 
 function startDrag(event, payload) {
   event.dataTransfer.effectAllowed = 'copy'
@@ -34,8 +56,18 @@ function describeTemplate(template) {
   <aside class="side-panel side-panel--left">
     <div class="panel-header">
       <h2>组件物料</h2>
-      <p>拖入中间画布，或点击直接添加到画布中心区域。</p>
+      <p>左侧维护页面、模板和基础组件，拖入中间画布即可完成搭建。</p>
     </div>
+
+    <PagePanel
+      :pages="pages"
+      :active-page-id="activePageId"
+      :can-delete-page="canDeletePage"
+      @select-page="emit('select-page', $event)"
+      @create-page="emit('create-page')"
+      @duplicate-page="emit('duplicate-page', $event)"
+      @delete-page="emit('delete-page', $event)"
+    />
 
     <section class="material-section">
       <div class="material-section__header">
@@ -88,7 +120,7 @@ function describeTemplate(template) {
       </div>
 
       <div v-else class="material-empty">
-        <span>选中组件后，点击顶部“保存模板”即可沉淀到这里。</span>
+        <span>选中组件后点击顶部“保存模板”，即可沉淀成可复用模板。</span>
       </div>
     </section>
 

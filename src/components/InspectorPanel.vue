@@ -1,12 +1,25 @@
 <script setup>
 import { computed } from 'vue'
+import DataSourcePanel from './DataSourcePanel.vue'
 import HistoryPanel from './HistoryPanel.vue'
 import LayerPanel from './LayerPanel.vue'
 
 const props = defineProps({
+  page: {
+    type: Object,
+    default: null
+  },
   project: {
     type: Object,
     required: true
+  },
+  pages: {
+    type: Array,
+    default: () => []
+  },
+  currentPageId: {
+    type: String,
+    default: ''
   },
   selectedWidget: {
     type: Object,
@@ -30,7 +43,7 @@ const props = defineProps({
   },
   currentHistoryLabel: {
     type: String,
-    default: '当前状态'
+    default: '当前项目'
   },
   undoEntries: {
     type: Array,
@@ -47,6 +60,14 @@ const props = defineProps({
   canRedo: {
     type: Boolean,
     default: false
+  },
+  dataSourceRuntime: {
+    type: Object,
+    default: () => ({})
+  },
+  sourceBindingCounts: {
+    type: Object,
+    default: () => ({})
   }
 })
 
@@ -57,9 +78,22 @@ defineEmits([
   'reorder-layer',
   'set-selected-hidden',
   'set-selected-locked',
+  'create-source',
+  'delete-source',
+  'refresh-source',
+  'refresh-all-sources',
+  'change-source-type',
+  'update-source-payload',
   'undo',
   'redo'
 ])
+
+const interactionActionOptions = [
+  { value: 'none', label: '无动作' },
+  { value: 'highlight-widgets', label: '高亮组件' },
+  { value: 'refresh-sources', label: '刷新数据源' },
+  { value: 'switch-page', label: '切换页面' }
+]
 
 const commonGroupId = computed(() => {
   if (props.selectedWidgets.length < 2) {
@@ -73,6 +107,63 @@ const commonGroupId = computed(() => {
   }
 
   return props.selectedWidgets.every((item) => item.groupId === firstGroupId) ? firstGroupId : null
+})
+
+const compatibleSources = computed(() => {
+  if (!props.selectedWidget) {
+    return []
+  }
+
+  return props.project.dataSources.filter((source) => source.type === props.selectedWidget.type)
+})
+
+const currentBoundSource = computed(() => {
+  if (!props.selectedWidget?.dataBinding?.sourceId) {
+    return null
+  }
+
+  return props.project.dataSources.find((source) => source.id === props.selectedWidget.dataBinding.sourceId) ?? null
+})
+
+const currentBoundRuntime = computed(() => {
+  const sourceId = props.selectedWidget?.dataBinding?.sourceId
+  return sourceId ? props.dataSourceRuntime[sourceId] ?? null : null
+})
+
+const otherWidgets = computed(() => {
+  if (!props.selectedWidget) {
+    return []
+  }
+
+  return props.project.widgets.filter((widget) => widget.id !== props.selectedWidget.id)
+})
+
+const availableTargetPages = computed(() =>
+  props.pages.filter((item) => item.id !== props.currentPageId)
+)
+
+const clickAction = computed({
+  get: () => props.selectedWidget?.interaction?.clickAction ?? 'none',
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    ensureInteraction()
+    props.selectedWidget.interaction.clickAction = value
+  }
+})
+
+const targetPageId = computed({
+  get: () => props.selectedWidget?.interaction?.targetPageId ?? '',
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    ensureInteraction()
+    props.selectedWidget.interaction.targetPageId = value
+  }
 })
 
 const barCategories = computed({
@@ -125,6 +216,21 @@ const lineValues = computed({
   }
 })
 
+function ensureInteraction() {
+  if (!props.selectedWidget) {
+    return
+  }
+
+  if (!props.selectedWidget.interaction) {
+    props.selectedWidget.interaction = {
+      clickAction: 'none',
+      targetWidgetIds: [],
+      targetSourceIds: [],
+      targetPageId: ''
+    }
+  }
+}
+
 function toNumberList(value) {
   return value
     .split(/[\s,，]+/)
@@ -132,6 +238,61 @@ function toNumberList(value) {
     .filter(Boolean)
     .map((item) => Number(item))
     .filter((item) => Number.isFinite(item))
+}
+
+function formatTime(timestamp) {
+  if (!timestamp) {
+    return '未刷新'
+  }
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(new Date(timestamp))
+}
+
+function toggleTargetWidget(widgetId) {
+  if (!props.selectedWidget) {
+    return
+  }
+
+  ensureInteraction()
+  const selected = new Set(props.selectedWidget.interaction.targetWidgetIds ?? [])
+
+  if (selected.has(widgetId)) {
+    selected.delete(widgetId)
+  } else {
+    selected.add(widgetId)
+  }
+
+  props.selectedWidget.interaction.targetWidgetIds = Array.from(selected)
+}
+
+function toggleTargetSource(sourceId) {
+  if (!props.selectedWidget) {
+    return
+  }
+
+  ensureInteraction()
+  const selected = new Set(props.selectedWidget.interaction.targetSourceIds ?? [])
+
+  if (selected.has(sourceId)) {
+    selected.delete(sourceId)
+  } else {
+    selected.add(sourceId)
+  }
+
+  props.selectedWidget.interaction.targetSourceIds = Array.from(selected)
+}
+
+function isTargetWidgetSelected(widgetId) {
+  return Boolean(props.selectedWidget?.interaction?.targetWidgetIds?.includes(widgetId))
+}
+
+function isTargetSourceSelected(sourceId) {
+  return Boolean(props.selectedWidget?.interaction?.targetSourceIds?.includes(sourceId))
 }
 </script>
 
@@ -152,8 +313,8 @@ function toNumberList(value) {
           selectedWidgets.length > 1
             ? '多选时可整体移动、编组、批量锁定或隐藏。'
             : selectedWidget
-              ? '直接修改组件位置、样式、数据和显示状态。'
-              : '未选中组件时，可配置画布基础参数。'
+              ? '直接修改组件位置、样式、数据和事件联动。'
+              : '未选中组件时，可配置当前页面、画布基础参数和数据源。'
         }}
       </p>
     </div>
@@ -194,8 +355,8 @@ function toNumberList(value) {
       <section class="inspector-group">
         <h3>交互提示</h3>
         <p class="inspector-tip">
-          可以使用 Ctrl/Cmd 点选追加组件，拖动画布空白区域进行框选，Ctrl/Cmd + G 编组，
-          Shift + Ctrl/Cmd + G 取消编组。
+          可以使用 Ctrl/Cmd 点选追加组件，拖动画布空白区域进行框选，Ctrl/Cmd + G 编组，Shift +
+          Ctrl/Cmd + G 取消编组。
         </p>
       </section>
 
@@ -250,6 +411,104 @@ function toNumberList(value) {
           <input v-model="selectedWidget.locked" type="checkbox" />
           <span>锁定当前组件</span>
         </label>
+      </section>
+
+      <section class="inspector-group">
+        <div class="inspector-group__header">
+          <h3>数据绑定</h3>
+          <button
+            class="ghost inspector-inline-button"
+            :disabled="!selectedWidget.dataBinding.sourceId"
+            @click="$emit('refresh-source', selectedWidget.dataBinding.sourceId)"
+          >
+            刷新
+          </button>
+        </div>
+
+        <label>
+          <span>绑定数据源</span>
+          <select v-model="selectedWidget.dataBinding.sourceId">
+            <option value="">未绑定</option>
+            <option v-for="source in compatibleSources" :key="source.id" :value="source.id">
+              {{ source.name }}
+            </option>
+          </select>
+        </label>
+
+        <p v-if="compatibleSources.length" class="inspector-tip">
+          当前组件可绑定 {{ compatibleSources.length }} 个同类型数据源，预览模式下会按刷新间隔自动更新。
+        </p>
+        <p v-else class="inspector-tip">
+          当前没有匹配 {{ selectedWidget.type }} 类型的数据源，可在下方数据源中心新增。
+        </p>
+
+        <div v-if="currentBoundSource" class="binding-preview">
+          <span>当前来源</span>
+          <strong>{{ currentBoundSource.name }}</strong>
+          <span>最近刷新 {{ formatTime(currentBoundRuntime?.updatedAt) }}</span>
+          <span>绑定数量 {{ sourceBindingCounts[currentBoundSource.id] ?? 0 }}</span>
+        </div>
+      </section>
+
+      <section class="inspector-group">
+        <h3>事件联动</h3>
+        <p class="inspector-caption">仅在预览模式下生效，适合做跳页、刷新数据和组件联动高亮。</p>
+
+        <label>
+          <span>点击动作</span>
+          <select v-model="clickAction">
+            <option v-for="option in interactionActionOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+
+        <template v-if="clickAction === 'highlight-widgets'">
+          <span>目标组件</span>
+          <div v-if="otherWidgets.length" class="inspector-choice-grid">
+            <button
+              v-for="widget in otherWidgets"
+              :key="widget.id"
+              type="button"
+              class="inspector-choice-button"
+              :class="{ 'is-active': isTargetWidgetSelected(widget.id) }"
+              @click="toggleTargetWidget(widget.id)"
+            >
+              {{ widget.name }}
+            </button>
+          </div>
+          <div v-else class="inspector-empty">当前页没有可联动的其他组件。</div>
+        </template>
+
+        <template v-if="clickAction === 'refresh-sources'">
+          <span>目标数据源</span>
+          <div v-if="project.dataSources.length" class="inspector-choice-grid">
+            <button
+              v-for="source in project.dataSources"
+              :key="source.id"
+              type="button"
+              class="inspector-choice-button"
+              :class="{ 'is-active': isTargetSourceSelected(source.id) }"
+              @click="toggleTargetSource(source.id)"
+            >
+              {{ source.name }}
+            </button>
+          </div>
+          <div v-else class="inspector-empty">当前项目还没有数据源。</div>
+        </template>
+
+        <template v-if="clickAction === 'switch-page'">
+          <label>
+            <span>目标页面</span>
+            <select v-model="targetPageId">
+              <option value="">请选择</option>
+              <option v-for="item in availableTargetPages" :key="item.id" :value="item.id">
+                {{ item.name }}
+              </option>
+            </select>
+          </label>
+          <div v-if="!availableTargetPages.length" class="inspector-empty">当前只有一个页面，无法切换。</div>
+        </template>
       </section>
 
       <section class="inspector-group">
@@ -437,9 +696,13 @@ function toNumberList(value) {
 
     <div v-else class="inspector">
       <section class="inspector-group">
-        <h3>画布信息</h3>
+        <h3>当前页面</h3>
         <label>
-          <span>标题</span>
+          <span>页面名称</span>
+          <input v-model="page.name" type="text" />
+        </label>
+        <label>
+          <span>画布标题</span>
           <input v-model="project.meta.title" type="text" />
         </label>
         <div class="inspector-grid">
@@ -464,6 +727,7 @@ function toNumberList(value) {
           <input v-model="project.meta.showGrid" type="checkbox" />
           <span>显示网格辅助线</span>
         </label>
+        <p class="inspector-tip">页面名称用于管理和切换，画布标题用于大屏展示。</p>
       </section>
     </div>
 
@@ -475,6 +739,18 @@ function toNumberList(value) {
       @toggle-layer-hidden="$emit('toggle-layer-hidden', $event)"
       @toggle-layer-locked="$emit('toggle-layer-locked', $event)"
       @reorder-layer="$emit('reorder-layer', $event)"
+    />
+
+    <DataSourcePanel
+      :data-sources="project.dataSources"
+      :binding-counts="sourceBindingCounts"
+      :data-source-runtime="dataSourceRuntime"
+      @create-source="$emit('create-source', $event)"
+      @delete-source="$emit('delete-source', $event)"
+      @refresh-source="$emit('refresh-source', $event)"
+      @refresh-all-sources="$emit('refresh-all-sources')"
+      @change-source-type="$emit('change-source-type', $event)"
+      @update-source-payload="$emit('update-source-payload', $event)"
     />
 
     <HistoryPanel

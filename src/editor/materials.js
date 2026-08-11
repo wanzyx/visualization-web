@@ -144,6 +144,15 @@ export function createWidget(type, overrides = {}) {
     groupId: null,
     locked: false,
     hidden: false,
+    dataBinding: {
+      sourceId: ''
+    },
+    interaction: {
+      clickAction: 'none',
+      targetWidgetIds: [],
+      targetSourceIds: [],
+      targetPageId: ''
+    },
     x: 80,
     y: 80,
     w: material.size.w,
@@ -152,6 +161,17 @@ export function createWidget(type, overrides = {}) {
     style: cloneDeep(material.style),
     props: cloneDeep(material.props),
     ...cloneDeep(overrides),
+    dataBinding: {
+      sourceId: '',
+      ...(overrides.dataBinding ?? {})
+    },
+    interaction: {
+      clickAction: 'none',
+      targetWidgetIds: [],
+      targetSourceIds: [],
+      targetPageId: '',
+      ...(overrides.interaction ?? {})
+    },
     style: {
       ...cloneDeep(material.style),
       ...(overrides.style ?? {})
