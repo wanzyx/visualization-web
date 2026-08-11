@@ -24,7 +24,13 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['selection-change', 'add-widget'])
+const emit = defineEmits([
+  'selection-change',
+  'add-widget',
+  'add-template',
+  'history-session-start',
+  'history-session-end'
+])
 
 const containerRef = ref(null)
 const stageRef = ref(null)
@@ -40,7 +46,9 @@ let interactionState = null
 let marqueeState = null
 
 const orderedWidgets = computed(() =>
-  [...props.project.widgets].sort((a, b) => a.zIndex - b.zIndex)
+  [...props.project.widgets]
+    .filter((item) => !item.hidden)
+    .sort((a, b) => a.zIndex - b.zIndex)
 )
 
 const selectedIdSet = computed(() => new Set(props.selectedIds))
@@ -116,6 +124,21 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max)
 }
 
+function parseDropSource(dataTransfer) {
+  const rawSource = dataTransfer.getData('application/widget-source')
+
+  if (rawSource) {
+    try {
+      return JSON.parse(rawSource)
+    } catch (error) {
+      console.warn(error)
+    }
+  }
+
+  const type = dataTransfer.getData('application/widget-type')
+  return type ? { kind: 'material', type } : null
+}
+
 function findWidget(widgetId) {
   return props.project.widgets.find((item) => item.id === widgetId) ?? null
 }
@@ -188,6 +211,11 @@ function resolveSelectionForInteraction(widgetId, event) {
   }
 }
 
+function handleWidgetSelect(payload) {
+  const selection = resolveSelectionForInteraction(payload.widgetId, payload.event)
+  emitSelection(selection.ids, selection.primaryId)
+}
+
 function beginInteraction(payload, mode) {
   if (props.previewMode || payload.event.button !== 0) {
     return
@@ -208,13 +236,17 @@ function beginInteraction(payload, mode) {
         }
 
   const activeIds = mode === 'move' ? selection.ids : [payload.widgetId]
-  const activeWidgets = props.project.widgets.filter((item) => activeIds.includes(item.id))
+  const activeWidgets = props.project.widgets.filter(
+    (item) => activeIds.includes(item.id) && !item.locked && !item.hidden
+  )
   const referenceBounds = getSelectionBounds(activeWidgets)
 
   if (!referenceBounds) {
+    emitSelection(selection.ids, selection.primaryId)
     return
   }
 
+  emit('history-session-start', mode === 'move' ? '移动组件' : '缩放组件')
   emitSelection(selection.ids, selection.primaryId)
 
   interactionState = {
@@ -247,7 +279,7 @@ function buildSnapTargets(ignoreIds) {
   }))
 
   props.project.widgets.forEach((widget) => {
-    if (ignored.has(widget.id)) {
+    if (ignored.has(widget.id) || widget.hidden) {
       return
     }
 
@@ -415,11 +447,16 @@ function handlePointerMove(event) {
 }
 
 function stopInteraction() {
+  if (!interactionState) {
+    return
+  }
+
   interactionState = null
   guideLines.value = {
     vertical: null,
     horizontal: null
   }
+  emit('history-session-end')
   window.removeEventListener('pointermove', handlePointerMove)
   window.removeEventListener('pointerup', stopInteraction)
 }
@@ -498,7 +535,10 @@ function finishMarqueeSelection() {
     const expandedIds = expandIdsWithGroups(ids, props.project.widgets)
 
     if (marqueeState.additive) {
-      emitSelection([...props.selectedIds, ...expandedIds], expandedIds.at(-1) ?? currentPrimaryId.value)
+      emitSelection(
+        [...props.selectedIds, ...expandedIds],
+        expandedIds.at(-1) ?? currentPrimaryId.value
+      )
     } else {
       emitSelection(expandedIds, expandedIds.at(-1) ?? null)
     }
@@ -519,14 +559,21 @@ function handleDrop(event) {
     return
   }
 
-  const type = event.dataTransfer.getData('application/widget-type')
+  const source = parseDropSource(event.dataTransfer)
 
-  if (!type) {
+  if (!source) {
     return
   }
 
   const point = toStagePoint(event)
-  emit('add-widget', type, point)
+
+  if (source.kind === 'material' && source.type) {
+    emit('add-widget', source.type, point)
+  }
+
+  if (source.kind === 'template' && source.templateId) {
+    emit('add-template', source.templateId, point)
+  }
 }
 
 function allowDrop(event) {
@@ -582,7 +629,9 @@ watch(
           :selected="isSelected(widget.id)"
           :primary-selected="isPrimary(widget.id)"
           :preview-mode="previewMode"
-          :can-resize="selectedIds.length === 1 && isPrimary(widget.id)"
+          :can-resize="selectedIds.length === 1 && isPrimary(widget.id) && !widget.locked"
+          :can-move="!widget.locked"
+          @select="handleWidgetSelect"
           @drag-start="beginInteraction($event, 'move')"
           @resize-start="beginInteraction($event, 'resize')"
         />

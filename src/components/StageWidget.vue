@@ -28,6 +28,10 @@ const props = defineProps({
   canResize: {
     type: Boolean,
     default: false
+  },
+  canMove: {
+    type: Boolean,
+    default: true
   }
 })
 
@@ -101,15 +105,20 @@ function handleResizeStart(event) {
     :class="{
       'is-selected': selected,
       'is-primary': primarySelected,
-      'is-grouped': Boolean(widget.groupId)
+      'is-grouped': Boolean(widget.groupId),
+      'is-locked': widget.locked
     }"
     :style="widgetStyle"
-    @click.stop="handleSelect"
   >
-    <div class="stage-widget__frame" :style="frameStyle" @pointerdown.stop.prevent="handleDragStart">
+    <div
+      class="stage-widget__frame"
+      :style="frameStyle"
+      @pointerdown.stop.prevent="canMove ? handleDragStart($event) : handleSelect($event)"
+    >
       <component :is="renderer" :widget="widget" />
       <span v-if="!previewMode" class="stage-widget__name">{{ widget.name }}</span>
       <span v-if="widget.groupId && !previewMode" class="stage-widget__group-badge">G</span>
+      <span v-if="widget.locked && !previewMode" class="stage-widget__lock-badge">锁定</span>
       <button
         v-if="canResize && !previewMode"
         class="stage-widget__resize-handle"

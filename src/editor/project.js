@@ -1,12 +1,17 @@
 import { cloneWidget, createWidget } from './materials'
 
 export const STORAGE_KEY = 'visualization-web-project-v1'
+export const TEMPLATE_STORAGE_KEY = 'visualization-web-templates-v1'
 
 const cloneDeep = (value) => JSON.parse(JSON.stringify(value))
 
 const createGroupId = () =>
   globalThis.crypto?.randomUUID?.() ??
   `group-${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+const createTemplateId = () =>
+  globalThis.crypto?.randomUUID?.() ??
+  `template-${Date.now()}-${Math.random().toString(16).slice(2)}`
 
 export const defaultMeta = {
   title: 'Vue3 大屏低代码平台',
@@ -41,7 +46,7 @@ export function createDemoProject() {
         zIndex: 2,
         props: {
           title: '左侧概览',
-          subtitle: '承载业务摘要、分析结论、筛选说明',
+          subtitle: '承载业务摘要、分析结论和筛选说明',
           content: '通过拖拽或点击左侧物料，可以快速组合文本、图表和指标卡，属性面板支持直接调整样式、尺寸和数据。'
         }
       }),
@@ -114,6 +119,8 @@ function normalizeWidget(widget, index) {
     id: widget?.id || normalized.id,
     name: widget?.name || normalized.name,
     groupId: widget?.groupId || null,
+    locked: Boolean(widget?.locked),
+    hidden: Boolean(widget?.hidden),
     x: Number(widget?.x ?? normalized.x),
     y: Number(widget?.y ?? normalized.y),
     w: Math.max(100, Number(widget?.w ?? normalized.w)),
@@ -237,4 +244,138 @@ export function removeWidgetGroup(project, selectedIds) {
   })
 
   return expandedIds.length
+}
+
+function buildTemplatePreview(widgets) {
+  const bounds = getSelectionBounds(widgets) ?? { w: 0, h: 0 }
+
+  return {
+    width: bounds.w,
+    height: bounds.h,
+    count: widgets.length
+  }
+}
+
+function normalizeTemplate(rawTemplate, index) {
+  if (!rawTemplate || typeof rawTemplate !== 'object') {
+    return null
+  }
+
+  const widgets = Array.isArray(rawTemplate.widgets)
+    ? rawTemplate.widgets.map((widget, widgetIndex) => normalizeWidget(widget, widgetIndex))
+    : []
+
+  if (!widgets.length) {
+    return null
+  }
+
+  const bounds = getSelectionBounds(widgets) ?? { x: 0, y: 0 }
+  const normalizedWidgets = widgets.map((widget, widgetIndex) => ({
+    ...widget,
+    x: widget.x - bounds.x,
+    y: widget.y - bounds.y,
+    zIndex: widgetIndex + 1
+  }))
+
+  return {
+    id: rawTemplate.id || `template-${index + 1}`,
+    name:
+      rawTemplate.name ||
+      (normalizedWidgets.length === 1
+        ? `${normalizedWidgets[0].name} 模板`
+        : `组合模板 ${normalizedWidgets.length} 项`),
+    createdAt: Number.isFinite(Number(rawTemplate.createdAt))
+      ? Number(rawTemplate.createdAt)
+      : Date.now(),
+    widgets: normalizedWidgets,
+    preview: buildTemplatePreview(normalizedWidgets)
+  }
+}
+
+export function loadTemplateLibrary() {
+  if (typeof localStorage === 'undefined') {
+    return []
+  }
+
+  const rawValue = localStorage.getItem(TEMPLATE_STORAGE_KEY)
+
+  if (!rawValue) {
+    return []
+  }
+
+  try {
+    const templates = JSON.parse(rawValue)
+
+    if (!Array.isArray(templates)) {
+      return []
+    }
+
+    return templates.map(normalizeTemplate).filter(Boolean)
+  } catch (error) {
+    console.warn(error)
+    return []
+  }
+}
+
+export function createTemplateFromSelection(project, selectedIds, name = '') {
+  const expandedIds = expandIdsWithGroups(selectedIds, project.widgets)
+  const selectedSet = new Set(expandedIds)
+  const sourceWidgets = project.widgets
+    .filter((item) => selectedSet.has(item.id))
+    .sort((a, b) => a.zIndex - b.zIndex)
+
+  if (!sourceWidgets.length) {
+    return null
+  }
+
+  const bounds = getSelectionBounds(sourceWidgets)
+
+  if (!bounds) {
+    return null
+  }
+
+  const widgets = sourceWidgets.map((widget, index) => ({
+    ...cloneDeep(widget),
+    x: widget.x - bounds.x,
+    y: widget.y - bounds.y,
+    zIndex: index + 1
+  }))
+
+  return {
+    id: createTemplateId(),
+    name: name.trim() || (widgets.length === 1 ? `${widgets[0].name} 模板` : `组合模板 ${widgets.length} 项`),
+    createdAt: Date.now(),
+    widgets,
+    preview: buildTemplatePreview(widgets)
+  }
+}
+
+export function instantiateTemplate(project, template, position = {}) {
+  if (!template?.widgets?.length) {
+    return []
+  }
+
+  const nextZIndex = getNextZIndex(project.widgets)
+  const groupMap = new Map()
+  const widgets = [...template.widgets].sort((a, b) => a.zIndex - b.zIndex)
+
+  return widgets.map((widget, index) => {
+    let nextGroupId = null
+
+    if (widget.groupId) {
+      if (!groupMap.has(widget.groupId)) {
+        groupMap.set(widget.groupId, createGroupId())
+      }
+      nextGroupId = groupMap.get(widget.groupId)
+    }
+
+    return cloneWidget(widget, {
+      x: (position.x ?? 80) + widget.x,
+      y: (position.y ?? 80) + widget.y,
+      zIndex: nextZIndex + index,
+      groupId: nextGroupId,
+      hidden: false,
+      locked: false
+    })
+  })
 }

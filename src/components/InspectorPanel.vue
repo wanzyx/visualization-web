@@ -1,5 +1,7 @@
 <script setup>
 import { computed } from 'vue'
+import HistoryPanel from './HistoryPanel.vue'
+import LayerPanel from './LayerPanel.vue'
 
 const props = defineProps({
   project: {
@@ -17,8 +19,47 @@ const props = defineProps({
   selectedBounds: {
     type: Object,
     default: null
+  },
+  selectedIds: {
+    type: Array,
+    default: () => []
+  },
+  primarySelectedId: {
+    type: String,
+    default: null
+  },
+  currentHistoryLabel: {
+    type: String,
+    default: '当前状态'
+  },
+  undoEntries: {
+    type: Array,
+    default: () => []
+  },
+  redoEntries: {
+    type: Array,
+    default: () => []
+  },
+  canUndo: {
+    type: Boolean,
+    default: false
+  },
+  canRedo: {
+    type: Boolean,
+    default: false
   }
 })
+
+defineEmits([
+  'select-layer',
+  'toggle-layer-hidden',
+  'toggle-layer-locked',
+  'reorder-layer',
+  'set-selected-hidden',
+  'set-selected-locked',
+  'undo',
+  'redo'
+])
 
 const commonGroupId = computed(() => {
   if (props.selectedWidgets.length < 2) {
@@ -109,9 +150,9 @@ function toNumberList(value) {
       <p>
         {{
           selectedWidgets.length > 1
-            ? '多选时可执行编组、删除、图层调整和整体拖拽。'
+            ? '多选时可整体移动、编组、批量锁定或隐藏。'
             : selectedWidget
-              ? '直接修改组件位置、样式和数据。'
+              ? '直接修改组件位置、样式、数据和显示状态。'
               : '未选中组件时，可配置画布基础参数。'
         }}
       </p>
@@ -119,7 +160,7 @@ function toNumberList(value) {
 
     <div v-if="selectedWidgets.length > 1" class="inspector">
       <section class="inspector-group">
-        <h3>当前选择</h3>
+        <h3>当前选区</h3>
         <div class="inspector-stat-list">
           <div>
             <span>组件数量</span>
@@ -127,7 +168,7 @@ function toNumberList(value) {
           </div>
           <div>
             <span>编组状态</span>
-            <strong>{{ commonGroupId ? '已编组' : '未统一编组' }}</strong>
+            <strong>{{ commonGroupId ? '已统一编组' : '未统一编组' }}</strong>
           </div>
           <div v-if="selectedBounds">
             <span>整体宽度</span>
@@ -141,10 +182,20 @@ function toNumberList(value) {
       </section>
 
       <section class="inspector-group">
+        <h3>批量操作</h3>
+        <div class="inspector-action-grid">
+          <button class="ghost" @click="$emit('set-selected-hidden', true)">隐藏所选</button>
+          <button class="ghost" @click="$emit('set-selected-hidden', false)">显示所选</button>
+          <button class="ghost" @click="$emit('set-selected-locked', true)">锁定所选</button>
+          <button class="ghost" @click="$emit('set-selected-locked', false)">解锁所选</button>
+        </div>
+      </section>
+
+      <section class="inspector-group">
         <h3>交互提示</h3>
         <p class="inspector-tip">
-          可使用 `Ctrl/Cmd` 点选追加组件，拖动画布空白区域可框选，`Ctrl/Cmd + G` 编组，
-          `Shift + Ctrl/Cmd + G` 取消编组。
+          可以使用 Ctrl/Cmd 点选追加组件，拖动画布空白区域进行框选，Ctrl/Cmd + G 编组，
+          Shift + Ctrl/Cmd + G 取消编组。
         </p>
       </section>
 
@@ -191,6 +242,14 @@ function toNumberList(value) {
             <input v-model.number="selectedWidget.style.rotate" type="number" />
           </label>
         </div>
+        <label class="inspector-switch">
+          <input v-model="selectedWidget.hidden" type="checkbox" />
+          <span>隐藏当前组件</span>
+        </label>
+        <label class="inspector-switch">
+          <input v-model="selectedWidget.locked" type="checkbox" />
+          <span>锁定当前组件</span>
+        </label>
       </section>
 
       <section class="inspector-group">
@@ -407,5 +466,25 @@ function toNumberList(value) {
         </label>
       </section>
     </div>
+
+    <LayerPanel
+      :widgets="project.widgets"
+      :selected-ids="selectedIds"
+      :primary-selected-id="primarySelectedId"
+      @select-layer="$emit('select-layer', $event)"
+      @toggle-layer-hidden="$emit('toggle-layer-hidden', $event)"
+      @toggle-layer-locked="$emit('toggle-layer-locked', $event)"
+      @reorder-layer="$emit('reorder-layer', $event)"
+    />
+
+    <HistoryPanel
+      :current-label="currentHistoryLabel"
+      :undo-entries="undoEntries"
+      :redo-entries="redoEntries"
+      :can-undo="canUndo"
+      :can-redo="canRedo"
+      @undo="$emit('undo')"
+      @redo="$emit('redo')"
+    />
   </aside>
 </template>

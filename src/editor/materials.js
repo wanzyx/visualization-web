@@ -90,7 +90,7 @@ const library = {
     type: 'gauge',
     label: '环形进度',
     description: '适合在线率、达成率等指标',
-    icon: '○',
+    icon: 'G',
     size: { w: 280, h: 280 },
     style: {
       ...defaultStyle
@@ -115,7 +115,7 @@ const library = {
     props: {
       title: '业务分区',
       subtitle: '支持作为信息容器使用',
-      content: '你可以把这类面板当作版心区块，搭配图表和指标卡组成完整大屏。'
+      content: '你可以把这类面板当作版心区块，搭配图表和指标卡片组成完整大屏。'
     }
   }
 }
@@ -142,6 +142,8 @@ export function createWidget(type, overrides = {}) {
     type: material.type,
     name: material.label,
     groupId: null,
+    locked: false,
+    hidden: false,
     x: 80,
     y: 80,
     w: material.size.w,
