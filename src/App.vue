@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import MaterialPanel from './components/MaterialPanel.vue'
+import RuntimeShell from './components/RuntimeShell.vue'
 import StageCanvas from './components/StageCanvas.vue'
 import InspectorPanel from './components/InspectorPanel.vue'
 import TopToolbar from './components/TopToolbar.vue'
@@ -31,6 +32,8 @@ const HISTORY_MERGE_WINDOW = 600
 const TEMPLATE_LIMIT = 30
 const LINKED_WIDGET_DURATION = 1800
 
+const initialRoute = getInitialRouteState()
+const appMode = ref(initialRoute.mode)
 const previewMode = ref(false)
 const dialogMode = ref(null)
 const dialogText = ref('')
@@ -41,13 +44,23 @@ const project = ref(loadProject())
 const templates = ref(loadTemplateLibrary())
 const dataSourceRuntime = ref({})
 const linkedWidgetIds = ref([])
+const runtimePageId = ref(initialRoute.pageId || '')
 
 const sourceRefreshTimers = new Map()
 let linkedWidgetTimerId = 0
 
+const isRuntimeMode = computed(() => appMode.value === 'runtime')
+
+const currentPageId = computed(() => {
+  const fallbackPageId = project.value.activePageId || project.value.pages[0]?.id || ''
+  const preferredPageId = isRuntimeMode.value ? runtimePageId.value : project.value.activePageId
+
+  return project.value.pages.some((page) => page.id === preferredPageId) ? preferredPageId : fallbackPageId
+})
+
 const currentPage = computed(() => {
   const pages = project.value.pages ?? []
-  return pages.find((page) => page.id === project.value.activePageId) ?? pages[0] ?? null
+  return pages.find((page) => page.id === currentPageId.value) ?? pages[0] ?? null
 })
 
 const currentWidgets = computed(() => currentPage.value?.widgets ?? [])
@@ -132,6 +145,44 @@ function loadProject() {
     console.warn(error)
     return createDemoProject()
   }
+}
+
+function getInitialRouteState() {
+  if (typeof window === 'undefined') {
+    return {
+      mode: 'editor',
+      pageId: ''
+    }
+  }
+
+  const url = new URL(window.location.href)
+  return {
+    mode: url.searchParams.get('mode') === 'runtime' ? 'runtime' : 'editor',
+    pageId: url.searchParams.get('page') || ''
+  }
+}
+
+function syncRoute() {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  const url = new URL(window.location.href)
+
+  if (isRuntimeMode.value) {
+    url.searchParams.set('mode', 'runtime')
+
+    if (currentPageId.value) {
+      url.searchParams.set('page', currentPageId.value)
+    } else {
+      url.searchParams.delete('page')
+    }
+  } else {
+    url.searchParams.delete('mode')
+    url.searchParams.delete('page')
+  }
+
+  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
 }
 
 function clamp(value, min, max) {
@@ -223,7 +274,7 @@ function clearSourceRefreshTimers() {
 function syncSourceRefreshTimers() {
   clearSourceRefreshTimers()
 
-  if (!previewMode.value) {
+  if (!previewMode.value && !isRuntimeMode.value) {
     return
   }
 
@@ -286,6 +337,28 @@ function refreshAllDataSources(options = {}) {
   }
 }
 
+async function copyRuntimeLink() {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  const pageId = currentPageId.value || project.value.activePageId || project.value.pages[0]?.id || ''
+  const url = new URL(window.location.href)
+  url.searchParams.set('mode', 'runtime')
+
+  if (pageId) {
+    url.searchParams.set('page', pageId)
+  }
+
+  try {
+    await navigator.clipboard.writeText(url.toString())
+    statusMessage.value = '运行地址已复制到剪贴板'
+  } catch (error) {
+    statusMessage.value = '运行地址复制失败，请手动复制浏览器地址'
+    console.warn(error)
+  }
+}
+
 function clearLinkedWidgetState() {
   linkedWidgetIds.value = []
 
@@ -312,6 +385,31 @@ function flashLinkedWidgets(widgetIds) {
     linkedWidgetIds.value = []
     linkedWidgetTimerId = 0
   }, LINKED_WIDGET_DURATION)
+}
+
+function enterRuntimeMode() {
+  closeDialog()
+  previewMode.value = false
+  clearLinkedWidgetState()
+  runtimePageId.value = currentPageId.value || project.value.activePageId || project.value.pages[0]?.id || ''
+  appMode.value = 'runtime'
+  refreshAllDataSources({ silent: true })
+  syncSourceRefreshTimers()
+  statusMessage.value = '已进入运行页'
+}
+
+function exitRuntimeMode() {
+  const pageId = currentPageId.value
+
+  if (pageId) {
+    project.value.activePageId = pageId
+  }
+
+  appMode.value = 'editor'
+  clearLinkedWidgetState()
+  selectDefaultWidget(project.value.pages.find((page) => page.id === pageId) ?? currentPage.value)
+  syncSourceRefreshTimers()
+  statusMessage.value = '已返回编辑器'
 }
 
 function createSource(type) {
@@ -399,7 +497,22 @@ function updateSourcePayload(payload) {
 function switchPage(pageId, options = {}) {
   const nextPage = project.value.pages.find((page) => page.id === pageId)
 
-  if (!nextPage || nextPage.id === project.value.activePageId) {
+  if (!nextPage) {
+    return
+  }
+
+  if (isRuntimeMode.value) {
+    if (nextPage.id === runtimePageId.value) {
+      return
+    }
+
+    runtimePageId.value = nextPage.id
+    clearLinkedWidgetState()
+    statusMessage.value = `已切换页面：${nextPage.name}`
+    return
+  }
+
+  if (nextPage.id === project.value.activePageId) {
     return
   }
 
@@ -792,7 +905,9 @@ function ungroupSelected() {
 function resetProject() {
   queueHistoryLabel('恢复示例项目')
   project.value = createDemoProject()
+  appMode.value = 'editor'
   previewMode.value = false
+  runtimePageId.value = ''
   clearLinkedWidgetState()
   selectDefaultWidget(currentPage.value)
   statusMessage.value = '已恢复示例项目'
@@ -824,7 +939,9 @@ function applyImport() {
     queueHistoryLabel('导入项目')
     project.value = nextProject
     dialogMode.value = null
+    appMode.value = 'editor'
     previewMode.value = false
+    runtimePageId.value = ''
     clearLinkedWidgetState()
     selectDefaultWidget(currentPage.value)
     statusMessage.value = '项目 JSON 已导入'
@@ -923,7 +1040,7 @@ function moveSelectionBy(deltaX, deltaY) {
 }
 
 function handleWidgetAction(widgetId) {
-  if (!previewMode.value) {
+  if (!previewMode.value && !isRuntimeMode.value) {
     return
   }
 
@@ -989,6 +1106,13 @@ function handleKeydown(event) {
     target instanceof HTMLElement &&
     (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
   ) {
+    return
+  }
+
+  if (isRuntimeMode.value) {
+    if (event.key === 'Escape') {
+      exitRuntimeMode()
+    }
     return
   }
 
@@ -1071,6 +1195,16 @@ function handleKeydown(event) {
   }
 }
 
+watch(currentPageId, (pageId) => {
+  if (isRuntimeMode.value && pageId && runtimePageId.value !== pageId) {
+    runtimePageId.value = pageId
+  }
+})
+
+watch([appMode, currentPageId], () => {
+  syncRoute()
+})
+
 watch(
   () => JSON.stringify(project.value),
   (nextSnapshot, previousSnapshot) => {
@@ -1125,6 +1259,10 @@ watch(
 )
 
 watch(previewMode, (enabled) => {
+  if (isRuntimeMode.value) {
+    return
+  }
+
   clearLinkedWidgetState()
   syncSourceRefreshTimers()
 
@@ -1139,6 +1277,12 @@ watch(previewMode, (enabled) => {
 })
 
 onMounted(() => {
+  if (isRuntimeMode.value) {
+    runtimePageId.value = currentPageId.value
+    refreshAllDataSources({ silent: true })
+    syncSourceRefreshTimers()
+  }
+
   window.addEventListener('keydown', handleKeydown)
 })
 
@@ -1152,6 +1296,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-shell" :class="{ 'app-shell--preview': previewMode }">
     <TopToolbar
+      v-if="!isRuntimeMode"
       :preview-mode="previewMode"
       :pages="project.pages"
       :active-page-id="project.activePageId"
@@ -1163,7 +1308,10 @@ onBeforeUnmount(() => {
       :can-redo="canRedo"
       :can-save-template="canSaveTemplate"
       :has-data-sources="hasDataSources"
+      :runtime-mode="isRuntimeMode"
       @toggle-preview="previewMode = !previewMode"
+      @open-runtime="enterRuntimeMode"
+      @copy-runtime-link="copyRuntimeLink"
       @select-page="switchPage"
       @reset-project="resetProject"
       @export-project="openExportDialog"
@@ -1180,7 +1328,21 @@ onBeforeUnmount(() => {
       @redo="redoProject"
     />
 
-    <section class="workspace">
+    <RuntimeShell
+      v-if="isRuntimeMode"
+      :project="currentCanvas"
+      :page="currentPage"
+      :pages="project.pages"
+      :active-page-id="currentPageId"
+      :linked-widget-ids="linkedWidgetIds"
+      :data-source-runtime="dataSourceRuntime"
+      @select-page="switchPage"
+      @exit-runtime="exitRuntimeMode"
+      @copy-runtime-link="copyRuntimeLink"
+      @trigger-widget-action="handleWidgetAction"
+    />
+
+    <section v-else class="workspace">
       <MaterialPanel
         v-if="!previewMode"
         :pages="project.pages"
@@ -1247,7 +1409,7 @@ onBeforeUnmount(() => {
       />
     </section>
 
-    <footer class="status-bar">
+    <footer v-if="!isRuntimeMode" class="status-bar">
       <span>{{ statusMessage }}</span>
       <span>当前页面：{{ currentPage?.name || '未命名页面' }}，预览模式下可点击组件触发联动。</span>
     </footer>

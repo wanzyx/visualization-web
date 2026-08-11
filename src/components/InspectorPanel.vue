@@ -3,6 +3,16 @@ import { computed } from 'vue'
 import DataSourcePanel from './DataSourcePanel.vue'
 import HistoryPanel from './HistoryPanel.vue'
 import LayerPanel from './LayerPanel.vue'
+import InspectorSection from './inspector/InspectorSection.vue'
+import SchemaFields from './inspector/SchemaFields.vue'
+import {
+  baseFields,
+  createPageFields,
+  createWidgetFields,
+  getWidgetSectionTitle,
+  interactionActionOptions,
+  styleFields
+} from '../editor/inspectorSchemas'
 
 const props = defineProps({
   page: {
@@ -88,13 +98,6 @@ defineEmits([
   'redo'
 ])
 
-const interactionActionOptions = [
-  { value: 'none', label: '无动作' },
-  { value: 'highlight-widgets', label: '高亮组件' },
-  { value: 'refresh-sources', label: '刷新数据源' },
-  { value: 'switch-page', label: '切换页面' }
-]
-
 const commonGroupId = computed(() => {
   if (props.selectedWidgets.length < 2) {
     return null
@@ -141,6 +144,30 @@ const otherWidgets = computed(() => {
 const availableTargetPages = computed(() =>
   props.pages.filter((item) => item.id !== props.currentPageId)
 )
+
+const panelTitle = computed(() => {
+  if (props.selectedWidgets.length > 1) {
+    return '多选概览'
+  }
+
+  if (props.selectedWidget) {
+    return `${props.selectedWidget.name} 属性`
+  }
+
+  return '页面配置'
+})
+
+const panelDescription = computed(() => {
+  if (props.selectedWidgets.length > 1) {
+    return '批量查看选区尺寸、组件数量和编组状态，并快速执行批量操作。'
+  }
+
+  if (props.selectedWidget) {
+    return '通过可折叠分组和独立 schema 配置管理组件基础属性、样式、数据和联动。'
+  }
+
+  return '未选中组件时，在这里配置页面尺寸、背景样式和全局画布参数。'
+})
 
 const clickAction = computed({
   get: () => props.selectedWidget?.interaction?.clickAction ?? 'none',
@@ -215,6 +242,25 @@ const lineValues = computed({
     props.selectedWidget.props.values = toNumberList(value)
   }
 })
+
+const pageFields = computed(() =>
+  createPageFields({
+    page: props.page,
+    project: props.project
+  })
+)
+
+const widgetFields = computed(() =>
+  createWidgetFields({
+    widget: props.selectedWidget,
+    barCategories,
+    barValues,
+    lineLabels,
+    lineValues
+  })
+)
+
+const widgetSectionTitle = computed(() => getWidgetSectionTitle(props.selectedWidget?.type))
 
 function ensureInteraction() {
   if (!props.selectedWidget) {
@@ -298,30 +344,18 @@ function isTargetSourceSelected(sourceId) {
 
 <template>
   <aside class="side-panel side-panel--right">
-    <div class="panel-header">
-      <h2>
-        {{
-          selectedWidgets.length > 1
-            ? '多选概览'
-            : selectedWidget
-              ? '属性配置'
-              : '页面配置'
-        }}
-      </h2>
-      <p>
-        {{
-          selectedWidgets.length > 1
-            ? '多选时可整体移动、编组、批量锁定或隐藏。'
-            : selectedWidget
-              ? '直接修改组件位置、样式、数据和事件联动。'
-              : '未选中组件时，可配置当前页面、画布基础参数和数据源。'
-        }}
-      </p>
+    <div class="panel-header panel-header--hero">
+      <span class="panel-header__eyebrow">Inspector</span>
+      <h2>{{ panelTitle }}</h2>
+      <p>{{ panelDescription }}</p>
     </div>
 
     <div v-if="selectedWidgets.length > 1" class="inspector">
-      <section class="inspector-group">
-        <h3>当前选区</h3>
+      <InspectorSection
+        title="当前选区"
+        caption="查看当前多选结果的规模、尺寸和编组状态。"
+        storage-key="panel-multi-summary"
+      >
         <div class="inspector-stat-list">
           <div>
             <span>组件数量</span>
@@ -340,82 +374,60 @@ function isTargetSourceSelected(sourceId) {
             <strong>{{ selectedBounds.h }}</strong>
           </div>
         </div>
-      </section>
+      </InspectorSection>
 
-      <section class="inspector-group">
-        <h3>批量操作</h3>
+      <InspectorSection
+        title="批量操作"
+        caption="对当前选区统一执行显隐和锁定控制。"
+        storage-key="panel-multi-actions"
+      >
         <div class="inspector-action-grid">
           <button class="ghost" @click="$emit('set-selected-hidden', true)">隐藏所选</button>
           <button class="ghost" @click="$emit('set-selected-hidden', false)">显示所选</button>
           <button class="ghost" @click="$emit('set-selected-locked', true)">锁定所选</button>
           <button class="ghost" @click="$emit('set-selected-locked', false)">解锁所选</button>
         </div>
-      </section>
+      </InspectorSection>
 
-      <section class="inspector-group">
-        <h3>交互提示</h3>
+      <InspectorSection
+        title="交互提示"
+        caption="常用快捷键和选择方式一览。"
+        storage-key="panel-multi-tips"
+      >
         <p class="inspector-tip">
           可以使用 Ctrl/Cmd 点选追加组件，拖动画布空白区域进行框选，Ctrl/Cmd + G 编组，Shift +
           Ctrl/Cmd + G 取消编组。
         </p>
-      </section>
+      </InspectorSection>
 
-      <section class="inspector-group">
-        <h3>已选组件</h3>
+      <InspectorSection
+        title="已选组件"
+        caption="快速确认当前选区包含哪些组件。"
+        storage-key="panel-multi-tags"
+      >
         <div class="inspector-tag-list">
           <span v-for="widget in selectedWidgets" :key="widget.id" class="inspector-tag">
             {{ widget.name }}
           </span>
         </div>
-      </section>
+      </InspectorSection>
     </div>
 
     <div v-else-if="selectedWidget" class="inspector">
-      <section class="inspector-group">
-        <h3>基础</h3>
-        <label>
-          <span>名称</span>
-          <input v-model="selectedWidget.name" type="text" />
-        </label>
-        <div class="inspector-grid">
-          <label>
-            <span>X</span>
-            <input v-model.number="selectedWidget.x" type="number" />
-          </label>
-          <label>
-            <span>Y</span>
-            <input v-model.number="selectedWidget.y" type="number" />
-          </label>
-          <label>
-            <span>宽度</span>
-            <input v-model.number="selectedWidget.w" type="number" min="120" />
-          </label>
-          <label>
-            <span>高度</span>
-            <input v-model.number="selectedWidget.h" type="number" min="80" />
-          </label>
-          <label>
-            <span>图层</span>
-            <input v-model.number="selectedWidget.zIndex" type="number" />
-          </label>
-          <label>
-            <span>旋转</span>
-            <input v-model.number="selectedWidget.style.rotate" type="number" />
-          </label>
-        </div>
-        <label class="inspector-switch">
-          <input v-model="selectedWidget.hidden" type="checkbox" />
-          <span>隐藏当前组件</span>
-        </label>
-        <label class="inspector-switch">
-          <input v-model="selectedWidget.locked" type="checkbox" />
-          <span>锁定当前组件</span>
-        </label>
-      </section>
+      <InspectorSection
+        title="基础属性"
+        caption="控制组件名称、位置尺寸、层级和显隐状态。"
+        storage-key="panel-widget-base"
+      >
+        <SchemaFields :fields="baseFields" :model="selectedWidget" />
+      </InspectorSection>
 
-      <section class="inspector-group">
-        <div class="inspector-group__header">
-          <h3>数据绑定</h3>
+      <InspectorSection
+        title="数据绑定"
+        caption="为当前组件连接同类型数据源，并查看实时刷新状态。"
+        storage-key="panel-widget-binding"
+      >
+        <template #actions>
           <button
             class="ghost inspector-inline-button"
             :disabled="!selectedWidget.dataBinding.sourceId"
@@ -423,7 +435,7 @@ function isTargetSourceSelected(sourceId) {
           >
             刷新
           </button>
-        </div>
+        </template>
 
         <label>
           <span>绑定数据源</span>
@@ -448,12 +460,13 @@ function isTargetSourceSelected(sourceId) {
           <span>最近刷新 {{ formatTime(currentBoundRuntime?.updatedAt) }}</span>
           <span>绑定数量 {{ sourceBindingCounts[currentBoundSource.id] ?? 0 }}</span>
         </div>
-      </section>
+      </InspectorSection>
 
-      <section class="inspector-group">
-        <h3>事件联动</h3>
-        <p class="inspector-caption">仅在预览模式下生效，适合做跳页、刷新数据和组件联动高亮。</p>
-
+      <InspectorSection
+        title="事件联动"
+        caption="仅在预览模式下生效，可触发高亮、刷新数据源或切换页面。"
+        storage-key="panel-widget-interaction"
+      >
         <label>
           <span>点击动作</span>
           <select v-model="clickAction">
@@ -509,226 +522,34 @@ function isTargetSourceSelected(sourceId) {
           </label>
           <div v-if="!availableTargetPages.length" class="inspector-empty">当前只有一个页面，无法切换。</div>
         </template>
-      </section>
+      </InspectorSection>
 
-      <section class="inspector-group">
-        <h3>样式</h3>
-        <label>
-          <span>背景</span>
-          <input v-model="selectedWidget.style.background" type="text" />
-        </label>
-        <label>
-          <span>边框颜色</span>
-          <input v-model="selectedWidget.style.borderColor" type="text" />
-        </label>
-        <div class="inspector-grid">
-          <label>
-            <span>圆角</span>
-            <input v-model.number="selectedWidget.style.radius" type="number" min="0" />
-          </label>
-          <label>
-            <span>内边距</span>
-            <input v-model.number="selectedWidget.style.padding" type="number" min="0" />
-          </label>
-          <label>
-            <span>透明度</span>
-            <input v-model.number="selectedWidget.style.opacity" type="number" min="0" max="1" step="0.1" />
-          </label>
-        </div>
-      </section>
+      <InspectorSection
+        title="样式"
+        caption="统一调整组件背景、边框、圆角和透明度。"
+        storage-key="panel-widget-style"
+      >
+        <SchemaFields :fields="styleFields" :model="selectedWidget" />
+      </InspectorSection>
 
-      <section v-if="selectedWidget.type === 'text'" class="inspector-group">
-        <h3>文本</h3>
-        <label>
-          <span>内容</span>
-          <textarea v-model="selectedWidget.props.text" rows="4" />
-        </label>
-        <div class="inspector-grid">
-          <label>
-            <span>字号</span>
-            <input v-model.number="selectedWidget.props.fontSize" type="number" min="12" />
-          </label>
-          <label>
-            <span>字重</span>
-            <input
-              v-model.number="selectedWidget.props.fontWeight"
-              type="number"
-              min="300"
-              max="900"
-              step="100"
-            />
-          </label>
-          <label>
-            <span>字距</span>
-            <input v-model.number="selectedWidget.props.letterSpacing" type="number" min="0" />
-          </label>
-          <label>
-            <span>对齐</span>
-            <select v-model="selectedWidget.props.align">
-              <option value="left">left</option>
-              <option value="center">center</option>
-              <option value="right">right</option>
-            </select>
-          </label>
-        </div>
-        <label>
-          <span>颜色</span>
-          <input v-model="selectedWidget.props.color" type="text" />
-        </label>
-      </section>
-
-      <section v-if="selectedWidget.type === 'stat'" class="inspector-group">
-        <h3>指标卡</h3>
-        <label>
-          <span>标题</span>
-          <input v-model="selectedWidget.props.title" type="text" />
-        </label>
-        <div class="inspector-grid">
-          <label>
-            <span>数值</span>
-            <input v-model="selectedWidget.props.value" type="text" />
-          </label>
-          <label>
-            <span>单位</span>
-            <input v-model="selectedWidget.props.unit" type="text" />
-          </label>
-          <label>
-            <span>趋势</span>
-            <input v-model.number="selectedWidget.props.trend" type="number" step="0.1" />
-          </label>
-          <label>
-            <span>趋势描述</span>
-            <input v-model="selectedWidget.props.trendLabel" type="text" />
-          </label>
-        </div>
-        <label>
-          <span>主色</span>
-          <input v-model="selectedWidget.props.color" type="text" />
-        </label>
-        <label>
-          <span>强调色</span>
-          <input v-model="selectedWidget.props.accent" type="text" />
-        </label>
-      </section>
-
-      <section v-if="selectedWidget.type === 'barChart'" class="inspector-group">
-        <h3>柱状图</h3>
-        <label>
-          <span>标题</span>
-          <input v-model="selectedWidget.props.title" type="text" />
-        </label>
-        <label>
-          <span>分类（每行一个）</span>
-          <textarea v-model="barCategories" rows="5" />
-        </label>
-        <label>
-          <span>数值（逗号分隔）</span>
-          <textarea v-model="barValues" rows="3" />
-        </label>
-        <label>
-          <span>柱体颜色</span>
-          <input v-model="selectedWidget.props.color" type="text" />
-        </label>
-      </section>
-
-      <section v-if="selectedWidget.type === 'lineChart'" class="inspector-group">
-        <h3>折线图</h3>
-        <label>
-          <span>标题</span>
-          <input v-model="selectedWidget.props.title" type="text" />
-        </label>
-        <label>
-          <span>标签（每行一个）</span>
-          <textarea v-model="lineLabels" rows="5" />
-        </label>
-        <label>
-          <span>数值（逗号分隔）</span>
-          <textarea v-model="lineValues" rows="3" />
-        </label>
-        <label>
-          <span>线条颜色</span>
-          <input v-model="selectedWidget.props.color" type="text" />
-        </label>
-        <label>
-          <span>区域颜色</span>
-          <input v-model="selectedWidget.props.areaColor" type="text" />
-        </label>
-      </section>
-
-      <section v-if="selectedWidget.type === 'gauge'" class="inspector-group">
-        <h3>环形进度</h3>
-        <label>
-          <span>标题</span>
-          <input v-model="selectedWidget.props.title" type="text" />
-        </label>
-        <div class="inspector-grid">
-          <label>
-            <span>百分比</span>
-            <input v-model.number="selectedWidget.props.value" type="number" min="0" max="100" />
-          </label>
-          <label>
-            <span>主色</span>
-            <input v-model="selectedWidget.props.color" type="text" />
-          </label>
-        </div>
-        <label>
-          <span>轨道色</span>
-          <input v-model="selectedWidget.props.trackColor" type="text" />
-        </label>
-      </section>
-
-      <section v-if="selectedWidget.type === 'panel'" class="inspector-group">
-        <h3>装饰面板</h3>
-        <label>
-          <span>标题</span>
-          <input v-model="selectedWidget.props.title" type="text" />
-        </label>
-        <label>
-          <span>副标题</span>
-          <input v-model="selectedWidget.props.subtitle" type="text" />
-        </label>
-        <label>
-          <span>正文</span>
-          <textarea v-model="selectedWidget.props.content" rows="4" />
-        </label>
-      </section>
+      <InspectorSection
+        :title="widgetSectionTitle"
+        caption="基于组件类型动态展示对应的专属配置字段。"
+        storage-key="panel-widget-schema"
+      >
+        <SchemaFields :fields="widgetFields" :model="selectedWidget" />
+      </InspectorSection>
     </div>
 
     <div v-else class="inspector">
-      <section class="inspector-group">
-        <h3>当前页面</h3>
-        <label>
-          <span>页面名称</span>
-          <input v-model="page.name" type="text" />
-        </label>
-        <label>
-          <span>画布标题</span>
-          <input v-model="project.meta.title" type="text" />
-        </label>
-        <div class="inspector-grid">
-          <label>
-            <span>宽度</span>
-            <input v-model.number="project.meta.screenWidth" type="number" min="1280" />
-          </label>
-          <label>
-            <span>高度</span>
-            <input v-model.number="project.meta.screenHeight" type="number" min="720" />
-          </label>
-        </div>
-        <label>
-          <span>背景</span>
-          <textarea v-model="project.meta.background" rows="4" />
-        </label>
-        <label>
-          <span>网格颜色</span>
-          <input v-model="project.meta.gridColor" type="text" />
-        </label>
-        <label class="inspector-switch">
-          <input v-model="project.meta.showGrid" type="checkbox" />
-          <span>显示网格辅助线</span>
-        </label>
+      <InspectorSection
+        title="当前页面"
+        caption="配置页面名称、画布尺寸、背景和网格表现。"
+        storage-key="panel-page-config"
+      >
+        <SchemaFields :fields="pageFields" :model="project" />
         <p class="inspector-tip">页面名称用于管理和切换，画布标题用于大屏展示。</p>
-      </section>
+      </InspectorSection>
     </div>
 
     <LayerPanel

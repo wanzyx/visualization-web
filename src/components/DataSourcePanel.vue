@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { dataSourceTypeOptions, getGeneratorOptions } from '../editor/dataSources'
+import InspectorSection from './inspector/InspectorSection.vue'
 
 defineProps({
   dataSources: {
@@ -54,13 +55,17 @@ function formatRuntimeTime(timestamp) {
 </script>
 
 <template>
-  <section class="inspector-group">
-    <div class="inspector-group__header">
-      <h3>数据源中心</h3>
+  <InspectorSection
+    title="数据源中心"
+    caption="统一维护组件数据，支持静态配置和动态刷新策略。"
+    storage-key="panel-data-source"
+    :default-open="false"
+  >
+    <template #actions>
       <button class="ghost inspector-inline-button" @click="$emit('refresh-all-sources')">
         全部刷新
       </button>
-    </div>
+    </template>
 
     <div class="data-source-panel__toolbar">
       <select v-model="draftType">
@@ -143,7 +148,7 @@ function formatRuntimeTime(timestamp) {
     </div>
 
     <div v-else class="material-empty">
-      <span>这里可以维护图表、文本、指标等统一数据源，并在组件属性里完成绑定。</span>
+      <span>这里可以统一维护文本、图表和指标类数据源，再到组件属性中完成绑定。</span>
     </div>
-  </section>
+  </InspectorSection>
 </template>

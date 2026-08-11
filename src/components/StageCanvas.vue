@@ -22,6 +22,14 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  showMeta: {
+    type: Boolean,
+    default: true
+  },
+  runtimeMode: {
+    type: Boolean,
+    default: false
+  },
   linkedWidgetIds: {
     type: Array,
     default: () => []
@@ -631,8 +639,8 @@ watch(
 </script>
 
 <template>
-  <main ref="containerRef" class="canvas-wrap">
-    <div class="canvas-meta">
+  <main ref="containerRef" class="canvas-wrap" :class="{ 'canvas-wrap--runtime': runtimeMode }">
+    <div v-if="showMeta" class="canvas-meta">
       <div>
         <h2>{{ project.meta.title }}</h2>
         <p>{{ project.meta.screenWidth }} x {{ project.meta.screenHeight }} 画布</p>

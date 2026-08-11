@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
+import InspectorSection from './inspector/InspectorSection.vue'
 
 const props = defineProps({
   widgets: {
@@ -104,8 +105,11 @@ function isDropAfter(widgetId) {
 </script>
 
 <template>
-  <section class="inspector-group">
-    <h3>图层面板</h3>
+  <InspectorSection
+    title="图层面板"
+    caption="按 z-index 管理显示顺序，可拖拽调整前后层级。"
+    storage-key="panel-layer"
+  >
     <div class="layer-list">
       <div
         v-for="widget in orderedLayers"
@@ -155,5 +159,5 @@ function isDropAfter(widgetId) {
         </div>
       </div>
     </div>
-  </section>
+  </InspectorSection>
 </template>

@@ -54,9 +54,10 @@ function describeTemplate(template) {
 
 <template>
   <aside class="side-panel side-panel--left">
-    <div class="panel-header">
-      <h2>组件物料</h2>
-      <p>左侧维护页面、模板和基础组件，拖入中间画布即可完成搭建。</p>
+    <div class="panel-header panel-header--hero">
+      <span class="panel-header__eyebrow">Materials</span>
+      <h2>组件物料台</h2>
+      <p>先选页面，再从基础组件和模板库里快速拼出大屏布局。</p>
     </div>
 
     <PagePanel
@@ -71,7 +72,10 @@ function describeTemplate(template) {
 
     <section class="material-section">
       <div class="material-section__header">
-        <h3>基础组件</h3>
+        <div>
+          <h3>基础组件</h3>
+          <p class="material-section__caption">适合快速搭建标题、图表、指标卡和装饰面板。</p>
+        </div>
         <span>{{ materials.length }} 项</span>
       </div>
 
@@ -87,13 +91,17 @@ function describeTemplate(template) {
           <span class="material-card__icon">{{ item.icon }}</span>
           <span class="material-card__label">{{ item.label }}</span>
           <span class="material-card__description">{{ item.description }}</span>
+          <span class="material-card__hint">点击添加 / 拖拽到画布</span>
         </button>
       </div>
     </section>
 
     <section class="material-section">
       <div class="material-section__header">
-        <h3>自定义模板</h3>
+        <div>
+          <h3>自定义模板</h3>
+          <p class="material-section__caption">把常用布局沉淀下来，后续复用更快。</p>
+        </div>
         <span>{{ templates.length }} 项</span>
       </div>
 
@@ -111,6 +119,7 @@ function describeTemplate(template) {
             </div>
             <span class="material-card__label">{{ template.name }}</span>
             <span class="material-card__description">{{ describeTemplate(template) }}</span>
+            <span class="material-card__hint">拖拽整组布局到当前页面</span>
           </button>
 
           <button class="template-card__remove" @click="emit('remove-template', template.id)">
@@ -120,13 +129,13 @@ function describeTemplate(template) {
       </div>
 
       <div v-else class="material-empty">
-        <span>选中组件后点击顶部“保存模板”，即可沉淀成可复用模板。</span>
+        <span>选中画布上的组件后，点击顶部“保存模板”即可沉淀成可复用模板。</span>
       </div>
     </section>
 
-    <div class="panel-tip">
-      <p>快捷键</p>
-      <span>Delete 删除，方向键微调，Ctrl/Cmd + D 复制，Ctrl/Cmd + G 编组。</span>
+    <div class="panel-tip panel-tip--accent">
+      <p>工作流建议</p>
+      <span>先搭页面结构，再绑定数据源，最后通过事件联动完成跳页和高亮交互。</span>
     </div>
   </aside>
 </template>

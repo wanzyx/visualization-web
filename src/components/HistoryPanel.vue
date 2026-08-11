@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import InspectorSection from './inspector/InspectorSection.vue'
 
 const props = defineProps({
   currentLabel: {
@@ -31,18 +32,20 @@ const visibleRedoEntries = computed(() => [...props.redoEntries].slice(-6).rever
 </script>
 
 <template>
-  <section class="inspector-group">
-    <div class="history-panel__header">
-      <h3>历史记录</h3>
-      <div class="history-panel__actions">
-        <button class="ghost history-panel__button" :disabled="!canUndo" @click="$emit('undo')">
-          撤销
-        </button>
-        <button class="ghost history-panel__button" :disabled="!canRedo" @click="$emit('redo')">
-          重做
-        </button>
-      </div>
-    </div>
+  <InspectorSection
+    title="历史记录"
+    caption="查看最近编辑轨迹，并随时撤销或重做。"
+    storage-key="panel-history"
+    :default-open="false"
+  >
+    <template #actions>
+      <button class="ghost history-panel__button" :disabled="!canUndo" @click="$emit('undo')">
+        撤销
+      </button>
+      <button class="ghost history-panel__button" :disabled="!canRedo" @click="$emit('redo')">
+        重做
+      </button>
+    </template>
 
     <div class="history-panel__current">
       <span>当前状态</span>
@@ -78,5 +81,5 @@ const visibleRedoEntries = computed(() => [...props.redoEntries].slice(-6).rever
         </div>
       </div>
     </div>
-  </section>
+  </InspectorSection>
 </template>
