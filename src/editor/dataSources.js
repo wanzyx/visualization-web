@@ -25,6 +25,50 @@ function formatClock(date = new Date()) {
   }).format(date)
 }
 
+function formatClockText(date = new Date(), options = {}) {
+  const locale = String(options.locale || 'zh-CN').trim() || 'zh-CN'
+  const timeZone = String(options.timeZone || '').trim()
+  const showSeconds = options.showSeconds !== false
+  const use24Hour = options.use24Hour !== false
+
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: showSeconds ? '2-digit' : undefined,
+      hour12: !use24Hour,
+      timeZone: timeZone || undefined
+    }).format(date)
+  } catch (error) {
+    console.warn(error)
+    return formatClock(date)
+  }
+}
+
+function formatDateText(date = new Date(), options = {}) {
+  const locale = String(options.locale || 'zh-CN').trim() || 'zh-CN'
+  const timeZone = String(options.timeZone || '').trim()
+  const showWeekday = options.showWeekday !== false
+
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      weekday: showWeekday ? 'long' : undefined,
+      timeZone: timeZone || undefined
+    }).format(date)
+  } catch (error) {
+    console.warn(error)
+    return new Intl.DateTimeFormat('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      weekday: showWeekday ? 'long' : undefined
+    }).format(date)
+  }
+}
+
 function serializeTextValue(value, fallback = '') {
   if (typeof value === 'string') {
     return value
@@ -101,6 +145,27 @@ const sourceSpecs = {
       accent: '#84ffbf'
     })
   },
+  digitStat: {
+    label: '数字翻牌',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'digitPulse', label: '数字跳动' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      title: '今日交易额',
+      value: 1284068,
+      unit: '元',
+      tag: 'REALTIME',
+      prefix: '¥',
+      suffix: '',
+      decimals: 0,
+      groupSeparator: true,
+      color: '#ecf7ff',
+      accent: '#46eeff',
+      unitColor: 'rgba(235, 247, 255, 0.72)'
+    })
+  },
   barChart: {
     label: '柱状图',
     generators: [
@@ -113,6 +178,248 @@ const sourceSpecs = {
       categories: ['App', '小程序', '官网', '门店', '其他'],
       values: [92, 76, 54, 39, 22],
       color: '#46eeff'
+    })
+  },
+  pieChart: {
+    label: '饼图',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'piePulse', label: '占比变化' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      title: '业务构成',
+      categories: ['零售', '服务', '供应链', '其他'],
+      values: [38, 26, 21, 15],
+      colors: ['#46eeff', '#7bfecb', '#ffd66b', '#6d8bff']
+    })
+  },
+  heatmapChart: {
+    label: '区域热力图',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'heatmapPulse', label: '热力波动' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      title: '区域活跃热力',
+      xLabels: ['东区', '西区', '南区', '北区', '中枢'],
+      yLabels: ['00:00', '06:00', '12:00', '18:00'],
+      values: [
+        [12, 18, 9, 6, 22],
+        [22, 31, 16, 12, 35],
+        [30, 42, 28, 20, 48],
+        [18, 26, 19, 14, 29]
+      ],
+      lowColor: 'rgba(70, 238, 255, 0.08)',
+      highColor: '#46eeff',
+      showValues: true
+    })
+  },
+  rankingList: {
+    label: '排行列表',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'rankPulse', label: '排行波动' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      title: '区域排名',
+      unit: '分',
+      accent: '#46eeff',
+      items: [
+        { name: '浦东新区', value: 98 },
+        { name: '黄浦区', value: 92 },
+        { name: '徐汇区', value: 88 },
+        { name: '长宁区', value: 81 },
+        { name: '静安区', value: 76 }
+      ]
+    })
+  },
+  image: {
+    label: '图片',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      src: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1200&q=80',
+      alt: '智慧园区示意图',
+      caption: '园区运营总览',
+      objectFit: 'cover',
+      showCaption: true
+    })
+  },
+  video: {
+    label: '视频',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      src: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+      poster:
+        'https://images.unsplash.com/photo-1473448912268-2022ce9509d8?auto=format&fit=crop&w=1200&q=80',
+      title: '园区宣传视频',
+      objectFit: 'cover',
+      autoplay: true,
+      loop: true,
+      muted: true,
+      controls: true
+    })
+  },
+  iframe: {
+    label: '网页嵌入',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      src: 'https://www.openstreetmap.org/export/embed.html?bbox=121.441%2C31.205%2C121.503%2C31.255&layer=mapnik',
+      title: '园区地图总览',
+      showToolbar: true,
+      allowFullscreen: true,
+      sandbox: ''
+    })
+  },
+  clock: {
+    label: '时钟',
+    generators: [
+      { value: 'clockTick', label: '实时时钟' },
+      { value: 'static', label: '静态数据' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      title: '北京时间',
+      timeZone: 'Asia/Shanghai',
+      locale: 'zh-CN',
+      zoneLabel: '',
+      showSeconds: true,
+      showDate: true,
+      showWeekday: true,
+      use24Hour: true,
+      color: '#ecf7ff',
+      accent: '#46eeff',
+      dateColor: 'rgba(235, 247, 255, 0.72)',
+      timeText: '',
+      dateText: ''
+    })
+  },
+  noticeTicker: {
+    label: '公告跑马灯',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'tickerPulse', label: '公告轮播' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      title: '实时播报',
+      tag: 'NOTICE',
+      items: [
+        '北区停车场余位低于 15%，建议引导车辆分流',
+        '园区主链路抖动已恢复，当前延迟回落至 18ms',
+        'A 栋会议中心 10:30 将开始访客高峰预警'
+      ],
+      direction: 'left',
+      duration: 18,
+      showDot: true,
+      pauseOnHover: true,
+      accent: '#46eeff'
+    })
+  },
+  tabPanel: {
+    label: 'Tabs 分区切换',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'tabPulse', label: '分区轮播' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      title: '运行分区',
+      activeIndex: 0,
+      showTitle: true,
+      accent: '#46eeff',
+      secondaryColor: 'rgba(235, 247, 255, 0.16)',
+      items: [
+        {
+          label: '园区总览',
+          value: '128',
+          unit: '项',
+          description: '在线任务总体平稳，停车与能耗两个区域需要持续关注。',
+          meta: '综合态势'
+        },
+        {
+          label: '安防态势',
+          value: '18',
+          unit: '条',
+          description: '重点告警主要集中在北区出入口和会议中心周边。',
+          meta: '重点告警'
+        },
+        {
+          label: '设备运维',
+          value: '96',
+          unit: '%',
+          description: '主设备在线率维持高位，建议继续跟进两台边缘节点。',
+          meta: '在线率'
+        }
+      ]
+    })
+  },
+  titleBar: {
+    label: '标题条',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      title: '园区安防态势',
+      subtitle: 'Security Overview',
+      tag: 'SECTION 01',
+      align: 'left',
+      accent: '#46eeff',
+      showLine: true,
+      showGlow: true
+    })
+  },
+  borderFrame: {
+    label: '装饰边框',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      title: '重点监控区',
+      subtitle: 'Support Zone',
+      badge: 'LIVE',
+      accent: '#46eeff',
+      secondaryColor: '#7bfecb',
+      showHeader: true,
+      showGrid: true,
+      showGlow: true
+    })
+  },
+  dataTable: {
+    label: '数据表格',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'tablePulse', label: '表格轮播' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      title: '实时告警列表',
+      accent: '#46eeff',
+      columns: [
+        { key: 'name', label: '事件' },
+        { key: 'level', label: '等级' },
+        { key: 'owner', label: '负责人' },
+        { key: 'time', label: '时间' }
+      ],
+      rows: [
+        { name: '北区客流异常', level: '高', owner: '张峰', time: '09:42:18' },
+        { name: '园区网络波动', level: '中', owner: '李欣', time: '09:39:07' },
+        { name: '停车场余位预警', level: '低', owner: '王宁', time: '09:32:44' },
+        { name: '能耗峰值提醒', level: '中', owner: '陈曦', time: '09:28:13' }
+      ]
     })
   },
   lineChart: {
@@ -190,11 +497,122 @@ export function getRemoteFieldMappingTemplate(type) {
       trend: 'trend',
       trendLabel: 'trendLabel'
     },
+    digitStat: {
+      title: 'title',
+      value: 'value',
+      unit: 'unit',
+      tag: 'tag',
+      prefix: 'prefix',
+      suffix: 'suffix',
+      decimals: 'decimals',
+      groupSeparator: 'groupSeparator',
+      color: 'color',
+      accent: 'accent',
+      unitColor: 'unitColor'
+    },
     barChart: {
       title: 'title',
       categories: 'categories',
       values: 'values',
       color: 'color'
+    },
+    pieChart: {
+      title: 'title',
+      categories: 'categories',
+      values: 'values',
+      colors: 'colors'
+    },
+    heatmapChart: {
+      title: 'title',
+      xLabels: 'xLabels',
+      yLabels: 'yLabels',
+      values: 'values',
+      lowColor: 'lowColor',
+      highColor: 'highColor',
+      showValues: 'showValues'
+    },
+    rankingList: {
+      title: 'title',
+      unit: 'unit',
+      accent: 'accent',
+      items: 'items'
+    },
+    image: {
+      src: 'src',
+      alt: 'alt',
+      caption: 'caption',
+      objectFit: 'objectFit'
+    },
+    video: {
+      src: 'src',
+      poster: 'poster',
+      title: 'title',
+      objectFit: 'objectFit'
+    },
+    iframe: {
+      src: 'src',
+      title: 'title',
+      showToolbar: 'showToolbar',
+      allowFullscreen: 'allowFullscreen',
+      sandbox: 'sandbox'
+    },
+    clock: {
+      title: 'title',
+      timeZone: 'timeZone',
+      locale: 'locale',
+      zoneLabel: 'zoneLabel',
+      showSeconds: 'showSeconds',
+      showDate: 'showDate',
+      showWeekday: 'showWeekday',
+      use24Hour: 'use24Hour',
+      color: 'color',
+      accent: 'accent',
+      dateColor: 'dateColor',
+      timeText: 'timeText',
+      dateText: 'dateText'
+    },
+    noticeTicker: {
+      title: 'title',
+      tag: 'tag',
+      items: 'items',
+      direction: 'direction',
+      duration: 'duration',
+      showDot: 'showDot',
+      pauseOnHover: 'pauseOnHover',
+      accent: 'accent'
+    },
+    tabPanel: {
+      title: 'title',
+      activeIndex: 'activeIndex',
+      showTitle: 'showTitle',
+      accent: 'accent',
+      secondaryColor: 'secondaryColor',
+      items: 'items'
+    },
+    titleBar: {
+      title: 'title',
+      subtitle: 'subtitle',
+      tag: 'tag',
+      align: 'align',
+      accent: 'accent',
+      showLine: 'showLine',
+      showGlow: 'showGlow'
+    },
+    borderFrame: {
+      title: 'title',
+      subtitle: 'subtitle',
+      badge: 'badge',
+      accent: 'accent',
+      secondaryColor: 'secondaryColor',
+      showHeader: 'showHeader',
+      showGrid: 'showGrid',
+      showGlow: 'showGlow'
+    },
+    dataTable: {
+      title: 'title',
+      accent: 'accent',
+      columns: 'columns',
+      rows: 'rows'
     },
     lineChart: {
       title: 'title',
@@ -225,6 +643,8 @@ export function createDataSource(type, overrides = {}) {
   const generator = generatorOptions.some((item) => item.value === overrides.generator)
     ? overrides.generator
     : fallbackGenerator
+  const defaultRefreshInterval =
+    safeType === 'clock' && generator === 'clockTick' && overrides.refreshInterval == null ? 1 : 0
 
   return {
     id: overrides.id ?? createId(),
@@ -233,7 +653,7 @@ export function createDataSource(type, overrides = {}) {
     generator,
     refreshInterval: Number.isFinite(Number(overrides.refreshInterval))
       ? Math.max(0, Number(overrides.refreshInterval))
-      : 0,
+      : defaultRefreshInterval,
     request: createDataSourceRequestConfig(overrides.request ?? {}),
     payload: {
       ...getDefaultDataSourcePayload(safeType),
@@ -297,6 +717,82 @@ function createLinePayload(basePayload) {
   }
 }
 
+function createHeatmapPayload(basePayload) {
+  const yLabels = Array.isArray(basePayload.yLabels) ? basePayload.yLabels.filter(Boolean) : []
+  const xLabels = Array.isArray(basePayload.xLabels) ? basePayload.xLabels.filter(Boolean) : []
+  const rows = Array.isArray(basePayload.values) ? basePayload.values : []
+
+  return {
+    ...basePayload,
+    values: yLabels.map((_, rowIndex) =>
+      xLabels.map((__, columnIndex) => {
+        const currentRow = Array.isArray(rows[rowIndex]) ? rows[rowIndex] : []
+        const current = Number(currentRow[columnIndex] ?? 0)
+        const seed = current || 12 + rowIndex * 6 + columnIndex * 3
+        return Math.max(0, Math.round(seed + randomBetween(-8, 10)))
+      })
+    )
+  }
+}
+
+function createPiePayload(basePayload) {
+  const categories = Array.isArray(basePayload.categories) ? basePayload.categories.filter(Boolean) : []
+  const values = Array.isArray(basePayload.values) ? basePayload.values : []
+
+  return {
+    ...basePayload,
+    values: categories.map((_, index) => {
+      const current = Number(values[index] ?? 0)
+      const seed = current || 12 + index * 6
+      return Math.max(0, Math.round(seed + randomBetween(-8, 10)))
+    })
+  }
+}
+
+function createRankingPayload(basePayload) {
+  const items = Array.isArray(basePayload.items) ? basePayload.items : []
+
+  return {
+    ...basePayload,
+    items: items
+      .map((item, index) => {
+        const seed = Number(item?.value ?? 24 + index * 7)
+
+        return {
+          name: String(item?.name ?? '').trim(),
+          value: Math.max(
+            0,
+            Math.round((Number.isFinite(seed) ? seed : 24 + index * 7) + randomBetween(-8, 11))
+          )
+        }
+      })
+      .filter((item) => item.name)
+      .sort((left, right) => right.value - left.value)
+  }
+}
+
+function createTablePayload(basePayload) {
+  const columns = Array.isArray(basePayload.columns) ? basePayload.columns : []
+  const rows = Array.isArray(basePayload.rows) ? basePayload.rows : []
+  const levelOptions = ['高', '中', '低']
+
+  return {
+    ...basePayload,
+    rows: rows.map((row, index) => {
+      const currentLevel = String(row?.level ?? '')
+      const currentTime = String(row?.time ?? formatClock())
+      return {
+        ...row,
+        level:
+          levelOptions[(index + Math.floor(randomBetween(0, levelOptions.length))) % levelOptions.length] ||
+          currentLevel,
+        time: index === 0 ? formatClock() : currentTime
+      }
+    }),
+    columns
+  }
+}
+
 function createGaugePayload(basePayload) {
   return {
     ...basePayload,
@@ -313,6 +809,49 @@ function createTextPayload(basePayload) {
   }
 }
 
+function createNoticeTickerPayload(basePayload) {
+  const items = Array.isArray(basePayload.items)
+    ? basePayload.items
+        .map((item) => String(item ?? '').trim())
+        .filter(Boolean)
+    : []
+
+  if (!items.length) {
+    return cloneDeep(basePayload)
+  }
+
+  const [firstItem, ...restItems] = items
+  const headline = firstItem.replace(/\s·\s\d{2}:\d{2}:\d{2}$/, '')
+
+  return {
+    ...basePayload,
+    items: [...restItems, `${headline} · ${formatClock()}`]
+  }
+}
+
+function createTabPanelPayload(basePayload) {
+  const items = Array.isArray(basePayload.items)
+    ? basePayload.items.map((item) => {
+        const nextItem = item && typeof item === 'object' && !Array.isArray(item) ? cloneDeep(item) : {}
+        const numericValue = Number(nextItem.value)
+
+        if (Number.isFinite(numericValue)) {
+          nextItem.value = String(Math.max(0, Math.round(numericValue + randomBetween(-6, 8))))
+        }
+
+        return nextItem
+      })
+    : []
+
+  const baseIndex = Number(basePayload.activeIndex ?? 0)
+
+  return {
+    ...basePayload,
+    items,
+    activeIndex: items.length ? (Math.max(0, Math.trunc(baseIndex)) + 1) % items.length : 0
+  }
+}
+
 function createPanelPayload(basePayload) {
   const notes = [
     '今日高优先级事件保持可控，建议关注告警波动区间。',
@@ -324,6 +863,31 @@ function createPanelPayload(basePayload) {
     ...basePayload,
     subtitle: `最近同步 ${formatClock()}`,
     content: notes[Math.floor(Math.random() * notes.length)]
+  }
+}
+
+function createClockPayload(basePayload) {
+  const now = new Date()
+  const timeText = formatClockText(now, {
+    locale: basePayload.locale,
+    timeZone: basePayload.timeZone,
+    showSeconds: basePayload.showSeconds,
+    use24Hour: basePayload.use24Hour
+  })
+  const dateText =
+    basePayload.showDate === false
+      ? ''
+      : formatDateText(now, {
+          locale: basePayload.locale,
+          timeZone: basePayload.timeZone,
+          showWeekday: basePayload.showWeekday
+        })
+
+  return {
+    ...basePayload,
+    zoneLabel: String(basePayload.zoneLabel || basePayload.timeZone || '本地时间').trim(),
+    timeText,
+    dateText
   }
 }
 
@@ -674,10 +1238,142 @@ function normalizeRemotePayload(type, extracted, basePayload) {
           ...basePayload,
           values: cloneDeep(extracted)
         }
+      case 'heatmapChart': {
+        const objectItems = extracted.filter(
+          (item) => item && typeof item === 'object' && !Array.isArray(item)
+        )
+
+        if (objectItems.length === extracted.length) {
+          const xLabels = Array.from(
+            new Set(objectItems.map((item) => String(item.x ?? item.xLabel ?? item.column ?? '').trim()).filter(Boolean))
+          )
+          const yLabels = Array.from(
+            new Set(objectItems.map((item) => String(item.y ?? item.yLabel ?? item.row ?? '').trim()).filter(Boolean))
+          )
+
+          if (xLabels.length && yLabels.length) {
+            const values = yLabels.map((yLabel) =>
+              xLabels.map((xLabel) => {
+                const targetItem = objectItems.find(
+                  (item) =>
+                    String(item.x ?? item.xLabel ?? item.column ?? '').trim() === xLabel &&
+                    String(item.y ?? item.yLabel ?? item.row ?? '').trim() === yLabel
+                )
+
+                return Number(targetItem?.value ?? targetItem?.count ?? targetItem?.total ?? 0)
+              })
+            )
+
+            return {
+              ...basePayload,
+              xLabels,
+              yLabels,
+              values
+            }
+          }
+        }
+
+        return {
+          ...basePayload,
+          values: extracted.map((row) =>
+            Array.isArray(row) ? row.map((item) => Number(item ?? 0)) : [Number(row ?? 0)]
+          )
+        }
+      }
+      case 'pieChart': {
+        const objectItems = extracted.filter(
+          (item) => item && typeof item === 'object' && !Array.isArray(item)
+        )
+
+        if (objectItems.length === extracted.length) {
+          const normalizedItems = objectItems.map((item, index) => ({
+            name: String(item.name ?? item.label ?? item.title ?? `项目 ${index + 1}`).trim(),
+            value: Number(item.value ?? item.count ?? item.total ?? 0)
+          }))
+
+          return {
+            ...basePayload,
+            categories: normalizedItems.map((item) => item.name),
+            values: normalizedItems.map((item) => item.value)
+          }
+        }
+
+        return {
+          ...basePayload,
+          values: cloneDeep(extracted)
+        }
+      }
+      case 'rankingList':
+        return {
+          ...basePayload,
+          items: extracted.map((item, index) => {
+            if (item && typeof item === 'object' && !Array.isArray(item)) {
+              return cloneDeep(item)
+            }
+
+            const baseItems = Array.isArray(basePayload.items) ? basePayload.items : []
+            return {
+              name: String(baseItems[index]?.name ?? `项目 ${index + 1}`),
+              value: Number(item ?? 0)
+            }
+          })
+        }
+      case 'dataTable':
+        return {
+          ...basePayload,
+          rows: extracted.map((item, index) => {
+            if (item && typeof item === 'object' && !Array.isArray(item)) {
+              return cloneDeep(item)
+            }
+
+            const columns = Array.isArray(basePayload.columns) ? basePayload.columns : []
+            const cells = Array.isArray(item) ? item : [item]
+            return Object.fromEntries(
+              columns.map((column, columnIndex) => [
+                column.key,
+                String(cells[columnIndex] ?? `${index + 1}`)
+              ])
+            )
+          })
+        }
       case 'text':
         return {
           ...basePayload,
           text: extracted.join(' / ')
+        }
+      case 'noticeTicker':
+        return {
+          ...basePayload,
+          items: extracted.map((item, index) => {
+            if (item && typeof item === 'object' && !Array.isArray(item)) {
+              return String(item.title ?? item.text ?? item.message ?? item.name ?? `播报 ${index + 1}`).trim()
+            }
+
+            return String(item ?? '').trim()
+          }).filter(Boolean)
+        }
+      case 'tabPanel':
+        return {
+          ...basePayload,
+          items: extracted.map((item, index) => {
+            if (item && typeof item === 'object' && !Array.isArray(item)) {
+              return {
+                label: String(item.label ?? item.name ?? item.title ?? `标签 ${index + 1}`).trim(),
+                value: String(item.value ?? item.count ?? item.total ?? item.metric ?? '').trim(),
+                unit: String(item.unit ?? '').trim(),
+                description: String(item.description ?? item.desc ?? item.summary ?? '').trim(),
+                meta: String(item.meta ?? item.tag ?? item.status ?? '').trim()
+              }
+            }
+
+            return {
+              label: `标签 ${index + 1}`,
+              value: String(item ?? '').trim(),
+              unit: '',
+              description: '',
+              meta: ''
+            }
+          })
         }
       case 'panel':
         return {
@@ -695,12 +1391,46 @@ function normalizeRemotePayload(type, extracted, basePayload) {
         ...basePayload,
         text: String(extracted)
       }
+    case 'image':
+    case 'video':
+    case 'iframe':
+      return {
+        ...basePayload,
+        src: String(extracted)
+      }
+    case 'clock':
+      return {
+        ...basePayload,
+        timeText: String(extracted)
+      }
+    case 'heatmapChart':
+      return {
+        ...basePayload,
+        title: String(extracted)
+      }
+    case 'noticeTicker':
+      return {
+        ...basePayload,
+        items: [String(extracted)]
+      }
+    case 'tabPanel':
+      return {
+        ...basePayload,
+        title: String(extracted)
+      }
+    case 'titleBar':
+    case 'borderFrame':
+      return {
+        ...basePayload,
+        title: String(extracted)
+      }
     case 'panel':
       return {
         ...basePayload,
         content: String(extracted)
       }
     case 'stat':
+    case 'digitStat':
     case 'gauge': {
       const nextValue = Number(extracted)
 
@@ -824,16 +1554,32 @@ export function generateDataSourcePayload(source) {
   switch (source.generator) {
     case 'statPulse':
       return createStatPayload(basePayload)
+    case 'digitPulse':
+      return createStatPayload(basePayload)
     case 'barPulse':
       return createBarPayload(basePayload)
+    case 'piePulse':
+      return createPiePayload(basePayload)
+    case 'heatmapPulse':
+      return createHeatmapPayload(basePayload)
+    case 'rankPulse':
+      return createRankingPayload(basePayload)
+    case 'tablePulse':
+      return createTablePayload(basePayload)
     case 'linePulse':
       return createLinePayload(basePayload)
     case 'gaugePulse':
       return createGaugePayload(basePayload)
     case 'headlineFlash':
       return createTextPayload(basePayload)
+    case 'tickerPulse':
+      return createNoticeTickerPayload(basePayload)
+    case 'tabPulse':
+      return createTabPanelPayload(basePayload)
     case 'panelDigest':
       return createPanelPayload(basePayload)
+    case 'clockTick':
+      return createClockPayload(basePayload)
     case 'remote':
     case 'static':
     default:

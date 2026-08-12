@@ -53,7 +53,7 @@ watch(open, (value) => {
 
 <template>
   <section class="inspector-group inspector-section" :class="{ 'is-collapsed': !open }">
-    <div class="inspector-section__header">
+    <div class="inspector-section__header" :class="{ 'has-actions': Boolean($slots.actions) }">
       <button class="inspector-section__toggle" type="button" @click="toggleOpen">
         <div class="inspector-section__copy">
           <h3>{{ title }}</h3>

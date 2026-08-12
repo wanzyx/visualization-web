@@ -121,6 +121,12 @@ const activeInteractionIndex = ref(0)
 const interactionActionLabelMap = Object.fromEntries(
   interactionActionOptions.map((option) => [option.value, option.label])
 )
+const interactionTriggerOptions = [
+  { value: 'click', label: '点击' },
+  { value: 'double-click', label: '双击' },
+  { value: 'hover', label: '悬停' },
+  { value: 'page-enter', label: '页面进入' }
+]
 const widgetTargetActionTypes = [
   'highlight-widgets',
   'show-widgets',
@@ -257,6 +263,216 @@ const lineValues = computed({
   }
 })
 
+const heatmapXLabels = computed({
+  get: () => props.selectedWidget?.props.xLabels?.join('\n') ?? '',
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    props.selectedWidget.props.xLabels = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+})
+
+const heatmapYLabels = computed({
+  get: () => props.selectedWidget?.props.yLabels?.join('\n') ?? '',
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    props.selectedWidget.props.yLabels = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+})
+
+const heatmapMatrix = computed({
+  get: () =>
+    (Array.isArray(props.selectedWidget?.props.values) ? props.selectedWidget.props.values : [])
+      .map((row) =>
+        (Array.isArray(row) ? row : [])
+          .map((value) => Number(value ?? 0))
+          .join(', ')
+      )
+      .join('\n'),
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    props.selectedWidget.props.values = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => toNumberList(item))
+  }
+})
+
+const noticeItems = computed({
+  get: () =>
+    (Array.isArray(props.selectedWidget?.props.items) ? props.selectedWidget.props.items : [])
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean)
+      .join('\n'),
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    props.selectedWidget.props.items = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+})
+
+const tabItems = computed({
+  get: () =>
+    (Array.isArray(props.selectedWidget?.props.items) ? props.selectedWidget.props.items : [])
+      .map((item) =>
+        [
+          String(item?.label ?? '').trim(),
+          String(item?.value ?? '').trim(),
+          String(item?.unit ?? '').trim(),
+          String(item?.description ?? '').trim(),
+          String(item?.meta ?? '').trim()
+        ].join('|')
+      )
+      .filter(Boolean)
+      .join('\n'),
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    props.selectedWidget.props.items = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item, index) => {
+        const [label = '', itemValue = '', unit = '', description = '', meta = ''] = item.split('|')
+        return {
+          label: label.trim() || `标签 ${index + 1}`,
+          value: itemValue.trim(),
+          unit: unit.trim(),
+          description: description.trim(),
+          meta: meta.trim()
+        }
+      })
+  }
+})
+
+const rankingNames = computed({
+  get: () =>
+    (Array.isArray(props.selectedWidget?.props.items) ? props.selectedWidget.props.items : [])
+      .map((item) => item?.name ?? '')
+      .filter(Boolean)
+      .join('\n'),
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    const names = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+    const currentItems = Array.isArray(props.selectedWidget.props.items)
+      ? props.selectedWidget.props.items
+      : []
+
+    props.selectedWidget.props.items = names.map((name, index) => ({
+      name,
+      value: Number(currentItems[index]?.value ?? 0)
+    }))
+  }
+})
+
+const rankingValues = computed({
+  get: () =>
+    (Array.isArray(props.selectedWidget?.props.items) ? props.selectedWidget.props.items : [])
+      .map((item) => Number(item?.value ?? 0))
+      .join(', '),
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    const values = toNumberList(value)
+    const currentItems = Array.isArray(props.selectedWidget.props.items)
+      ? props.selectedWidget.props.items
+      : []
+    const total = Math.max(currentItems.length, values.length)
+
+    props.selectedWidget.props.items = Array.from({ length: total }, (_, index) => ({
+      name: String(currentItems[index]?.name ?? `项目 ${index + 1}`).trim(),
+      value: Number.isFinite(values[index]) ? values[index] : Number(currentItems[index]?.value ?? 0)
+    })).filter((item) => item.name)
+  }
+})
+
+const tableColumns = computed({
+  get: () =>
+    (Array.isArray(props.selectedWidget?.props.columns) ? props.selectedWidget.props.columns : [])
+      .map((column) => `${column?.key ?? ''}|${column?.label ?? ''}`.trim())
+      .filter(Boolean)
+      .join('\n'),
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    const columns = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item, index) => {
+        const [rawKey = '', rawLabel = ''] = item.split('|')
+        const key = rawKey.trim() || `column${index + 1}`
+        const label = rawLabel.trim() || key
+        return { key, label }
+      })
+
+    props.selectedWidget.props.columns = columns
+    const rows = Array.isArray(props.selectedWidget.props.rows) ? props.selectedWidget.props.rows : []
+    props.selectedWidget.props.rows = rows.map((row) =>
+      Object.fromEntries(columns.map((column) => [column.key, row?.[column.key] ?? '']))
+    )
+  }
+})
+
+const tableRows = computed({
+  get: () => {
+    const columns = Array.isArray(props.selectedWidget?.props.columns) ? props.selectedWidget.props.columns : []
+    const rows = Array.isArray(props.selectedWidget?.props.rows) ? props.selectedWidget.props.rows : []
+    return rows
+      .map((row) => columns.map((column) => String(row?.[column.key] ?? '')).join('|'))
+      .join('\n')
+  },
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    const columns = Array.isArray(props.selectedWidget.props.columns) ? props.selectedWidget.props.columns : []
+    props.selectedWidget.props.rows = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        const cells = item.split('|')
+        return Object.fromEntries(
+          columns.map((column, index) => [column.key, String(cells[index] ?? '').trim()])
+        )
+      })
+  }
+})
+
 const pageFields = computed(() =>
   createPageFields({
     page: props.page,
@@ -270,7 +486,16 @@ const widgetFields = computed(() =>
     barCategories,
     barValues,
     lineLabels,
-    lineValues
+    lineValues,
+    heatmapXLabels,
+    heatmapYLabels,
+    heatmapMatrix,
+    noticeItems,
+    tabItems,
+    rankingNames,
+    rankingValues,
+    tableColumns,
+    tableRows
   })
 )
 
@@ -287,9 +512,14 @@ function ensureInteraction() {
 
   if (!props.selectedWidget.interaction || typeof props.selectedWidget.interaction !== 'object') {
     props.selectedWidget.interaction = {
+      trigger: 'click',
       actions: []
     }
     return
+  }
+
+  if (!interactionTriggerOptions.some((option) => option.value === props.selectedWidget.interaction.trigger)) {
+    props.selectedWidget.interaction.trigger = 'click'
   }
 
   if (!Array.isArray(props.selectedWidget.interaction.actions)) {
@@ -715,6 +945,14 @@ function isTargetSourceSelected(sourceId, action = selectedInteractionAction.val
 
             <div v-if="index === activeInteractionIndex" class="interaction-card__body">
               <div class="inspector-grid">
+                <label>
+                  <span>触发方式</span>
+                  <select v-model="selectedWidget.interaction.trigger">
+                    <option v-for="option in interactionTriggerOptions" :key="option.value" :value="option.value">
+                      {{ option.label }}
+                    </option>
+                  </select>
+                </label>
                 <label>
                   <span>动作类型</span>
                   <select :value="action.action" @change="updateInteractionActionType(action, $event.target.value)">

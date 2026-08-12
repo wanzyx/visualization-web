@@ -10,6 +10,10 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
+  projectName: {
+    type: String,
+    default: ''
+  },
   activePageId: {
     type: String,
     default: ''
@@ -64,6 +68,8 @@ defineEmits([
   'toggle-preview',
   'open-runtime',
   'copy-runtime-link',
+  'open-project-manager',
+  'save-project-copy',
   'select-page',
   'reset-project',
   'export-project',
@@ -87,6 +93,7 @@ const activePageName = computed(
 )
 
 const modeLabel = computed(() => (props.previewMode ? '预览模式' : '编辑模式'))
+const projectLabel = computed(() => props.projectName || '未命名项目')
 const selectionLabel = computed(() =>
   props.selectionCount ? `已选 ${props.selectionCount} 个组件` : '未选中组件'
 )
@@ -108,6 +115,10 @@ const pageCountLabel = computed(() => `${props.pages.length} 个页面`)
         <span class="toolbar__pill">
           <b>模式</b>
           <strong>{{ modeLabel }}</strong>
+        </span>
+        <span class="toolbar__pill">
+          <b>项目</b>
+          <strong>{{ projectLabel }}</strong>
         </span>
         <span class="toolbar__pill">
           <b>页面</b>
@@ -150,9 +161,7 @@ const pageCountLabel = computed(() => `${props.pages.length} 个页面`)
 
         <div class="toolbar__action-group">
           <button class="ghost" :disabled="!canGroup" @click="$emit('group-selected')">编组</button>
-          <button class="ghost" :disabled="!canUngroup" @click="$emit('ungroup-selected')">
-            解组
-          </button>
+          <button class="ghost" :disabled="!canUngroup" @click="$emit('ungroup-selected')">解组</button>
           <button class="ghost" :disabled="!canOperate" @click="$emit('send-to-back')">下移层</button>
           <button class="ghost" :disabled="!canOperate" @click="$emit('bring-to-front')">上移层</button>
           <button class="ghost" :disabled="!canSaveTemplate" @click="$emit('save-selection-template')">
@@ -161,6 +170,8 @@ const pageCountLabel = computed(() => `${props.pages.length} 个页面`)
         </div>
 
         <div class="toolbar__action-group toolbar__action-group--utility">
+          <button class="ghost" @click="$emit('open-project-manager')">项目中心</button>
+          <button class="ghost" @click="$emit('save-project-copy')">另存项目</button>
           <button class="ghost" @click="$emit('import-project')">导入</button>
           <button class="ghost" @click="$emit('export-project')">导出</button>
           <button class="ghost" @click="$emit('reset-project')">重置</button>

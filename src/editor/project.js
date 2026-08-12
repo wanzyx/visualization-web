@@ -21,6 +21,7 @@ const createPageId = () =>
 const createInteractionActionId = () =>
   globalThis.crypto?.randomUUID?.() ??
   `interaction-${Date.now()}-${Math.random().toString(16).slice(2)}`
+const interactionTriggers = ['click', 'double-click', 'hover', 'page-enter']
 
 const toFiniteNumber = (value, fallback) => {
   const nextValue = Number(value)
@@ -123,7 +124,10 @@ function buildLegacyInteractionActions(interaction) {
 }
 
 function normalizeInteraction(interaction) {
+  const trigger = interactionTriggers.includes(interaction?.trigger) ? interaction.trigger : 'click'
+
   return {
+    trigger,
     actions: Array.isArray(interaction?.actions)
       ? interaction.actions.map((action) => normalizeInteractionAction(action))
       : buildLegacyInteractionActions(interaction)

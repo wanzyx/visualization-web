@@ -235,28 +235,30 @@ function hasMoreSourceUsages(sourceId) {
 <template>
   <InspectorSection
     title="数据源中心"
-    caption="统一维护组件数据，支持静态模拟、远程接口、参数模板、鉴权配置和调试预览。"
+    caption="统一维护组件数据源、接口映射与调试结果。"
     storage-key="panel-data-source"
     :default-open="false"
   >
     <template #actions>
-      <button class="ghost inspector-inline-button" type="button" @click="$emit('copy-all-sources-config')">
-        复制全部配置
-      </button>
-      <button class="ghost inspector-inline-button" type="button" @click="$emit('clear-all-source-runtime')">
-        清空调试
-      </button>
-      <button
-        v-if="getUnusedSourceCount() > 0"
-        class="ghost inspector-inline-button"
-        type="button"
-        @click="$emit('remove-unused-sources')"
-      >
-        清理未使用
-      </button>
-      <button class="ghost inspector-inline-button" type="button" @click="$emit('refresh-all-sources')">
-        全部刷新
-      </button>
+      <div class="data-source-panel__header-actions">
+        <button class="ghost inspector-inline-button" type="button" @click="$emit('copy-all-sources-config')">
+          复制配置
+        </button>
+        <button class="ghost inspector-inline-button" type="button" @click="$emit('clear-all-source-runtime')">
+          清空调试
+        </button>
+        <button
+          v-if="getUnusedSourceCount() > 0"
+          class="ghost inspector-inline-button"
+          type="button"
+          @click="$emit('remove-unused-sources')"
+        >
+          清理未用
+        </button>
+        <button class="ghost inspector-inline-button" type="button" @click="$emit('refresh-all-sources')">
+          全部刷新
+        </button>
+      </div>
     </template>
 
     <div class="data-source-panel__toolbar">

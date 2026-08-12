@@ -53,6 +53,30 @@ const library = {
       accent: '#84ffbf'
     }
   },
+  digitStat: {
+    type: 'digitStat',
+    label: '数字翻牌',
+    description: '适合大屏核心数值、金额、总量和实时计数展示',
+    icon: '888',
+    size: { w: 420, h: 210 },
+    style: {
+      ...defaultStyle,
+      background: 'linear-gradient(180deg, rgba(10, 25, 46, 0.86), rgba(4, 10, 20, 0.82))'
+    },
+    props: {
+      title: '今日交易额',
+      value: 1284068,
+      unit: '元',
+      tag: 'REALTIME',
+      prefix: '¥',
+      suffix: '',
+      decimals: 0,
+      groupSeparator: true,
+      color: '#ecf7ff',
+      accent: '#46eeff',
+      unitColor: 'rgba(235, 247, 255, 0.72)'
+    }
+  },
   barChart: {
     type: 'barChart',
     label: '柱状图',
@@ -84,6 +108,292 @@ const library = {
       values: [14, 28, 19, 33, 48, 30, 22],
       color: '#7bfecb',
       areaColor: 'rgba(123, 254, 203, 0.18)'
+    }
+  },
+  heatmapChart: {
+    type: 'heatmapChart',
+    label: '区域热力图',
+    description: '适合展示区域活跃度、时段密度和站点热度分布',
+    icon: 'HT',
+    size: { w: 560, h: 340 },
+    style: {
+      ...defaultStyle
+    },
+    props: {
+      title: '区域活跃热力',
+      xLabels: ['东区', '西区', '南区', '北区', '中枢'],
+      yLabels: ['00:00', '06:00', '12:00', '18:00'],
+      values: [
+        [12, 18, 9, 6, 22],
+        [22, 31, 16, 12, 35],
+        [30, 42, 28, 20, 48],
+        [18, 26, 19, 14, 29]
+      ],
+      lowColor: 'rgba(70, 238, 255, 0.08)',
+      highColor: '#46eeff',
+      showValues: true
+    }
+  },
+  pieChart: {
+    type: 'pieChart',
+    label: '饼图',
+    description: '适合占比、构成和分类分析',
+    icon: 'PIE',
+    size: { w: 420, h: 320 },
+    style: {
+      ...defaultStyle
+    },
+    props: {
+      title: '业务构成',
+      categories: ['零售', '服务', '供应链', '其他'],
+      values: [38, 26, 21, 15],
+      colors: ['#46eeff', '#7bfecb', '#ffd66b', '#6d8bff']
+    }
+  },
+  rankingList: {
+    type: 'rankingList',
+    label: '排行列表',
+    description: '适合展示榜单、区域排名和 TOP 数据',
+    icon: '#',
+    size: { w: 420, h: 320 },
+    style: {
+      ...defaultStyle
+    },
+    props: {
+      title: '区域排名',
+      unit: '分',
+      accent: '#46eeff',
+      items: [
+        { name: '浦东新区', value: 98 },
+        { name: '黄浦区', value: 92 },
+        { name: '徐汇区', value: 88 },
+        { name: '长宁区', value: 81 },
+        { name: '静安区', value: 76 }
+      ]
+    }
+  },
+  image: {
+    type: 'image',
+    label: '图片',
+    description: '适合品牌标识、背景图、示意图和海报',
+    icon: 'Img',
+    size: { w: 360, h: 220 },
+    style: {
+      ...defaultStyle,
+      padding: 12
+    },
+    props: {
+      src: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1200&q=80',
+      alt: '智慧园区示意图',
+      caption: '园区运营总览',
+      objectFit: 'cover',
+      showCaption: true
+    }
+  },
+  video: {
+    type: 'video',
+    label: '视频',
+    description: '适合宣传片、监控轮播和演示视频',
+    icon: 'Vid',
+    size: { w: 420, h: 260 },
+    style: {
+      ...defaultStyle,
+      padding: 12
+    },
+    props: {
+      src: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+      poster:
+        'https://images.unsplash.com/photo-1473448912268-2022ce9509d8?auto=format&fit=crop&w=1200&q=80',
+      title: '园区宣传视频',
+      objectFit: 'cover',
+      autoplay: true,
+      loop: true,
+      muted: true,
+      controls: true
+    }
+  },
+  iframe: {
+    type: 'iframe',
+    label: '网页嵌入',
+    description: '适合挂载地图、BI 看板、监控页和外部业务系统',
+    icon: 'Web',
+    size: { w: 520, h: 340 },
+    style: {
+      ...defaultStyle,
+      padding: 12
+    },
+    props: {
+      src: 'https://www.openstreetmap.org/export/embed.html?bbox=121.441%2C31.205%2C121.503%2C31.255&layer=mapnik',
+      title: '园区地图总览',
+      showToolbar: true,
+      allowFullscreen: true,
+      sandbox: ''
+    }
+  },
+  clock: {
+    type: 'clock',
+    label: '时钟日期',
+    description: '适合展示当前时间、日期、星期和时区信息',
+    icon: 'CLK',
+    size: { w: 420, h: 220 },
+    style: {
+      ...defaultStyle
+    },
+    props: {
+      title: '北京时间',
+      timeZone: 'Asia/Shanghai',
+      locale: 'zh-CN',
+      zoneLabel: '',
+      showSeconds: true,
+      showDate: true,
+      showWeekday: true,
+      use24Hour: true,
+      color: '#ecf7ff',
+      accent: '#46eeff',
+      dateColor: 'rgba(235, 247, 255, 0.72)',
+      timeText: '',
+      dateText: ''
+    }
+  },
+  noticeTicker: {
+    type: 'noticeTicker',
+    label: '公告跑马灯',
+    description: '适合轮播公告、预警播报、值班提示和实时事件流',
+    icon: 'NTC',
+    size: { w: 560, h: 92 },
+    style: {
+      ...defaultStyle,
+      background: 'linear-gradient(180deg, rgba(8, 21, 39, 0.9), rgba(4, 10, 20, 0.84))',
+      radius: 20,
+      padding: 12
+    },
+    props: {
+      title: '实时播报',
+      tag: 'NOTICE',
+      items: [
+        '北区停车场余位低于 15%，建议引导车辆分流',
+        '园区主链路抖动已恢复，当前延迟回落至 18ms',
+        'A 栋会议中心 10:30 将开始访客高峰预警'
+      ],
+      direction: 'left',
+      duration: 18,
+      showDot: true,
+      pauseOnHover: true,
+      accent: '#46eeff'
+    }
+  },
+  tabPanel: {
+    type: 'tabPanel',
+    label: 'Tabs 分区切换',
+    description: '适合多视角切换、分区摘要和同屏信息分层展示',
+    icon: 'TAB',
+    size: { w: 560, h: 300 },
+    style: {
+      ...defaultStyle,
+      background: 'linear-gradient(180deg, rgba(8, 20, 38, 0.92), rgba(4, 10, 20, 0.86))',
+      padding: 18
+    },
+    props: {
+      title: '运行分区',
+      activeIndex: 0,
+      showTitle: true,
+      accent: '#46eeff',
+      secondaryColor: 'rgba(235, 247, 255, 0.16)',
+      items: [
+        {
+          label: '园区总览',
+          value: '128',
+          unit: '项',
+          description: '在线任务总体平稳，停车与能耗两个区域需要持续关注。',
+          meta: '综合态势'
+        },
+        {
+          label: '安防态势',
+          value: '18',
+          unit: '条',
+          description: '重点告警主要集中在北区出入口和会议中心周边。',
+          meta: '重点告警'
+        },
+        {
+          label: '设备运维',
+          value: '96',
+          unit: '%',
+          description: '主设备在线率维持高位，建议继续跟进两台边缘节点。',
+          meta: '在线率'
+        }
+      ]
+    }
+  },
+  titleBar: {
+    type: 'titleBar',
+    label: '分区标题条',
+    description: '适合大屏模块标题、章节分区和导览头部',
+    icon: 'Hdr',
+    size: { w: 520, h: 120 },
+    style: {
+      background: 'transparent',
+      borderColor: 'transparent',
+      radius: 0,
+      padding: 0,
+      opacity: 1,
+      rotate: 0
+    },
+    props: {
+      title: '园区安防态势',
+      subtitle: 'Security Overview',
+      tag: 'SECTION 01',
+      align: 'left',
+      accent: '#46eeff',
+      showLine: true,
+      showGlow: true
+    }
+  },
+  borderFrame: {
+    type: 'borderFrame',
+    label: '装饰边框',
+    description: '适合模块框架、重点区域包裹和内容分区外框',
+    icon: 'Frm',
+    size: { w: 520, h: 300 },
+    style: {
+      ...defaultStyle,
+      background: 'rgba(4, 12, 22, 0.28)',
+      padding: 16
+    },
+    props: {
+      title: '重点监控区',
+      subtitle: 'Support Zone',
+      badge: 'LIVE',
+      accent: '#46eeff',
+      secondaryColor: '#7bfecb',
+      showHeader: true,
+      showGrid: true,
+      showGlow: true
+    }
+  },
+  dataTable: {
+    type: 'dataTable',
+    label: '数据表格',
+    description: '适合展示明细、告警列表和实时记录',
+    icon: 'Tbl',
+    size: { w: 560, h: 320 },
+    style: {
+      ...defaultStyle
+    },
+    props: {
+      title: '实时告警列表',
+      accent: '#46eeff',
+      columns: [
+        { key: 'name', label: '事件' },
+        { key: 'level', label: '等级' },
+        { key: 'owner', label: '负责人' },
+        { key: 'time', label: '时间' }
+      ],
+      rows: [
+        { name: '北区客流异常', level: '高', owner: '张峰', time: '09:42:18' },
+        { name: '园区网络波动', level: '中', owner: '李欣', time: '09:39:07' },
+        { name: '停车场余位预警', level: '低', owner: '王宁', time: '09:32:44' },
+        { name: '能耗峰值提醒', level: '中', owner: '陈晨', time: '09:28:13' }
+      ]
     }
   },
   gauge: {
@@ -148,6 +458,7 @@ export function createWidget(type, overrides = {}) {
       sourceId: ''
     },
     interaction: {
+      trigger: 'click',
       actions: []
     },
     x: 80,
@@ -163,6 +474,7 @@ export function createWidget(type, overrides = {}) {
       ...(overrides.dataBinding ?? {})
     },
     interaction: {
+      trigger: 'click',
       actions: [],
       ...(overrides.interaction ?? {})
     },

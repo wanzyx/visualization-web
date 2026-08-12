@@ -2,11 +2,23 @@
 import { computed, defineAsyncComponent } from 'vue'
 import TextWidget from './renderers/TextWidget.vue'
 import StatWidget from './renderers/StatWidget.vue'
+import DigitStatWidget from './renderers/DigitStatWidget.vue'
 import PanelWidget from './renderers/PanelWidget.vue'
+import ImageWidget from './renderers/ImageWidget.vue'
+import VideoWidget from './renderers/VideoWidget.vue'
+import IframeWidget from './renderers/IframeWidget.vue'
+import ClockWidget from './renderers/ClockWidget.vue'
+import NoticeTickerWidget from './renderers/NoticeTickerWidget.vue'
+import TabPanelWidget from './renderers/TabPanelWidget.vue'
+import TitleBarWidget from './renderers/TitleBarWidget.vue'
+import BorderFrameWidget from './renderers/BorderFrameWidget.vue'
 import { getInteractionActions } from '../editor/project'
 
 const BarChartWidget = defineAsyncComponent(() => import('./renderers/BarChartWidget.vue'))
 const LineChartWidget = defineAsyncComponent(() => import('./renderers/LineChartWidget.vue'))
+const PieChartWidget = defineAsyncComponent(() => import('./renderers/PieChartWidget.vue'))
+const RankingListWidget = defineAsyncComponent(() => import('./renderers/RankingListWidget.vue'))
+const DataTableWidget = defineAsyncComponent(() => import('./renderers/DataTableWidget.vue'))
 const GaugeWidget = defineAsyncComponent(() => import('./renderers/GaugeWidget.vue'))
 
 const props = defineProps({
@@ -49,8 +61,20 @@ const emit = defineEmits(['select', 'drag-start', 'resize-start', 'trigger-actio
 const componentMap = {
   text: TextWidget,
   stat: StatWidget,
+  digitStat: DigitStatWidget,
+  image: ImageWidget,
+  video: VideoWidget,
+  iframe: IframeWidget,
+  clock: ClockWidget,
+  noticeTicker: NoticeTickerWidget,
+  tabPanel: TabPanelWidget,
+  titleBar: TitleBarWidget,
+  borderFrame: BorderFrameWidget,
   barChart: BarChartWidget,
   lineChart: LineChartWidget,
+  pieChart: PieChartWidget,
+  rankingList: RankingListWidget,
+  dataTable: DataTableWidget,
   gauge: GaugeWidget,
   panel: PanelWidget
 }
@@ -76,7 +100,13 @@ const renderer = computed(() => componentMap[props.widget.type] || PanelWidget)
 const interactionActions = computed(() =>
   getInteractionActions(props.widget.interaction).filter((action) => action.action !== 'none')
 )
-const interactive = computed(() => props.previewMode && interactionActions.value.length > 0)
+const interactionTrigger = computed(() => props.widget.interaction?.trigger || 'click')
+const interactive = computed(
+  () =>
+    props.previewMode &&
+    interactionActions.value.length > 0 &&
+    ['click', 'double-click', 'hover'].includes(interactionTrigger.value)
+)
 
 const interactionLabelMap = {
   'highlight-widgets': '联动高亮',
@@ -116,6 +146,13 @@ const displayWidget = computed(() => {
     }
   }
 })
+
+function emitTriggerAction(event) {
+  emit('trigger-action', {
+    widgetId: props.widget.id,
+    event
+  })
+}
 
 function handleSelect(event) {
   if (props.previewMode) {
@@ -166,14 +203,31 @@ function handleFramePointerDown(event) {
 }
 
 function handleFrameClick(event) {
-  if (!props.previewMode || !interactionActions.value.length) {
+  if (!props.previewMode || !interactionActions.value.length || interactionTrigger.value !== 'click') {
     return
   }
 
-  emit('trigger-action', {
-    widgetId: props.widget.id,
-    event
-  })
+  emitTriggerAction(event)
+}
+
+function handleFrameDoubleClick(event) {
+  if (
+    !props.previewMode ||
+    !interactionActions.value.length ||
+    interactionTrigger.value !== 'double-click'
+  ) {
+    return
+  }
+
+  emitTriggerAction(event)
+}
+
+function handleFrameMouseEnter(event) {
+  if (!props.previewMode || !interactionActions.value.length || interactionTrigger.value !== 'hover') {
+    return
+  }
+
+  emitTriggerAction(event)
 }
 </script>
 
@@ -195,8 +249,10 @@ function handleFrameClick(event) {
       :style="frameStyle"
       @pointerdown.stop="handleFramePointerDown"
       @click.stop="handleFrameClick"
+      @dblclick.stop="handleFrameDoubleClick"
+      @mouseenter="handleFrameMouseEnter"
     >
-      <component :is="renderer" :widget="displayWidget" />
+      <component :is="renderer" :widget="displayWidget" :preview-mode="previewMode" />
       <span v-if="!previewMode" class="stage-widget__name">{{ widget.name }}</span>
       <span v-if="widget.groupId && !previewMode" class="stage-widget__group-badge">G</span>
       <span v-if="widget.locked && !previewMode" class="stage-widget__lock-badge">锁定</span>

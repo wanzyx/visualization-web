@@ -5,12 +5,24 @@ export const interactionActionOptions = [
   { value: 'switch-page', label: '切换页面' },
   { value: 'show-widgets', label: '显示组件' },
   { value: 'hide-widgets', label: '隐藏组件' },
-  { value: 'toggle-widgets-visibility', label: '切换组件显隐' }
+  { value: 'toggle-widgets-visibility', label: '切换显隐' }
 ]
 
 export const alignOptions = [
   { value: 'left', label: 'left' },
   { value: 'center', label: 'center' },
+  { value: 'right', label: 'right' }
+]
+
+export const mediaFitOptions = [
+  { value: 'cover', label: 'cover' },
+  { value: 'contain', label: 'contain' },
+  { value: 'fill', label: 'fill' },
+  { value: 'scale-down', label: 'scale-down' }
+]
+
+export const tickerDirectionOptions = [
+  { value: 'left', label: 'left' },
   { value: 'right', label: 'right' }
 ]
 
@@ -49,7 +61,7 @@ export const baseFields = [
   },
   {
     path: 'zIndex',
-    label: '图层',
+    label: '层级',
     type: 'number',
     span: 'half'
   },
@@ -210,7 +222,22 @@ export function createPageFields({ page, project }) {
   ]
 }
 
-export function createWidgetFields({ widget, barCategories, barValues, lineLabels, lineValues }) {
+export function createWidgetFields({
+  widget,
+  barCategories,
+  barValues,
+  lineLabels,
+  lineValues,
+  heatmapXLabels,
+  heatmapYLabels,
+  heatmapMatrix,
+  noticeItems,
+  tabItems,
+  rankingNames,
+  rankingValues,
+  tableColumns,
+  tableRows
+}) {
   if (!widget) {
     return []
   }
@@ -218,19 +245,8 @@ export function createWidgetFields({ widget, barCategories, barValues, lineLabel
   switch (widget.type) {
     case 'text':
       return [
-        {
-          path: 'props.text',
-          label: '内容',
-          type: 'textarea',
-          rows: 4
-        },
-        {
-          path: 'props.fontSize',
-          label: '字号',
-          type: 'number',
-          min: 12,
-          span: 'half'
-        },
+        { path: 'props.text', label: '内容', type: 'textarea', rows: 4 },
+        { path: 'props.fontSize', label: '字号', type: 'number', min: 12, span: 'half' },
         {
           path: 'props.fontWeight',
           label: '字重',
@@ -240,13 +256,7 @@ export function createWidgetFields({ widget, barCategories, barValues, lineLabel
           step: 100,
           span: 'half'
         },
-        {
-          path: 'props.letterSpacing',
-          label: '字距',
-          type: 'number',
-          min: 0,
-          span: 'half'
-        },
+        { path: 'props.letterSpacing', label: '字距', type: 'number', min: 0, span: 'half' },
         {
           path: 'props.align',
           label: '对齐',
@@ -254,64 +264,38 @@ export function createWidgetFields({ widget, barCategories, barValues, lineLabel
           options: alignOptions,
           span: 'half'
         },
-        {
-          path: 'props.color',
-          label: '颜色',
-          type: 'text'
-        }
+        { path: 'props.color', label: '颜色', type: 'text' }
       ]
 
     case 'stat':
       return [
-        {
-          path: 'props.title',
-          label: '标题',
-          type: 'text'
-        },
-        {
-          path: 'props.value',
-          label: '数值',
-          type: 'text',
-          span: 'half'
-        },
-        {
-          path: 'props.unit',
-          label: '单位',
-          type: 'text',
-          span: 'half'
-        },
-        {
-          path: 'props.trend',
-          label: '趋势',
-          type: 'number',
-          step: 0.1,
-          span: 'half'
-        },
-        {
-          path: 'props.trendLabel',
-          label: '趋势描述',
-          type: 'text',
-          span: 'half'
-        },
-        {
-          path: 'props.color',
-          label: '主色',
-          type: 'text'
-        },
-        {
-          path: 'props.accent',
-          label: '强调色',
-          type: 'text'
-        }
+        { path: 'props.title', label: '标题', type: 'text' },
+        { path: 'props.value', label: '数值', type: 'text', span: 'half' },
+        { path: 'props.unit', label: '单位', type: 'text', span: 'half' },
+        { path: 'props.trend', label: '趋势', type: 'number', step: 0.1, span: 'half' },
+        { path: 'props.trendLabel', label: '趋势描述', type: 'text', span: 'half' },
+        { path: 'props.color', label: '主色', type: 'text' },
+        { path: 'props.accent', label: '强调色', type: 'text' }
+      ]
+
+    case 'digitStat':
+      return [
+        { path: 'props.title', label: '标题', type: 'text' },
+        { path: 'props.value', label: '数值', type: 'text', span: 'half' },
+        { path: 'props.unit', label: '单位', type: 'text', span: 'half' },
+        { path: 'props.tag', label: '标签', type: 'text', span: 'half' },
+        { path: 'props.decimals', label: '小数位', type: 'number', min: 0, max: 4, span: 'half' },
+        { path: 'props.prefix', label: '前缀', type: 'text', span: 'half' },
+        { path: 'props.suffix', label: '后缀', type: 'text', span: 'half' },
+        { path: 'props.groupSeparator', label: '千分位分隔', type: 'checkbox' },
+        { path: 'props.color', label: '数字颜色', type: 'text' },
+        { path: 'props.accent', label: '强调色', type: 'text' },
+        { path: 'props.unitColor', label: '单位颜色', type: 'text' }
       ]
 
     case 'barChart':
       return [
-        {
-          path: 'props.title',
-          label: '标题',
-          type: 'text'
-        },
+        { path: 'props.title', label: '标题', type: 'text' },
         {
           key: 'bar-categories',
           label: '分类（每行一个）',
@@ -332,20 +316,38 @@ export function createWidgetFields({ widget, barCategories, barValues, lineLabel
             barValues.value = value
           }
         },
+        { path: 'props.color', label: '柱体颜色', type: 'text' }
+      ]
+
+    case 'pieChart':
+      return [
+        { path: 'props.title', label: '标题', type: 'text' },
         {
-          path: 'props.color',
-          label: '柱体颜色',
-          type: 'text'
-        }
+          key: 'pie-categories',
+          label: '分类（每行一个）',
+          type: 'textarea',
+          rows: 5,
+          get: () => barCategories.value,
+          set: (value) => {
+            barCategories.value = value
+          }
+        },
+        {
+          key: 'pie-values',
+          label: '数值（逗号分隔）',
+          type: 'textarea',
+          rows: 3,
+          get: () => barValues.value,
+          set: (value) => {
+            barValues.value = value
+          }
+        },
+        { path: 'props.colors', label: '颜色数组 JSON', type: 'textarea', rows: 3 }
       ]
 
     case 'lineChart':
       return [
-        {
-          path: 'props.title',
-          label: '标题',
-          type: 'text'
-        },
+        { path: 'props.title', label: '标题', type: 'text' },
         {
           key: 'line-labels',
           label: '标签（每行一个）',
@@ -366,25 +368,263 @@ export function createWidgetFields({ widget, barCategories, barValues, lineLabel
             lineValues.value = value
           }
         },
+        { path: 'props.color', label: '线条颜色', type: 'text' },
+        { path: 'props.areaColor', label: '区域颜色', type: 'text' }
+      ]
+
+    case 'heatmapChart':
+      return [
+        { path: 'props.title', label: '标题', type: 'text' },
         {
-          path: 'props.color',
-          label: '线条颜色',
-          type: 'text'
+          key: 'heatmap-x-labels',
+          label: '横轴标签（每行一个）',
+          type: 'textarea',
+          rows: 5,
+          get: () => heatmapXLabels.value,
+          set: (value) => {
+            heatmapXLabels.value = value
+          }
         },
         {
-          path: 'props.areaColor',
-          label: '区域颜色',
-          type: 'text'
+          key: 'heatmap-y-labels',
+          label: '纵轴标签（每行一个）',
+          type: 'textarea',
+          rows: 5,
+          get: () => heatmapYLabels.value,
+          set: (value) => {
+            heatmapYLabels.value = value
+          }
+        },
+        {
+          key: 'heatmap-matrix',
+          label: '热力矩阵（每行一组，逗号分隔）',
+          type: 'textarea',
+          rows: 6,
+          get: () => heatmapMatrix.value,
+          set: (value) => {
+            heatmapMatrix.value = value
+          }
+        },
+        { path: 'props.lowColor', label: '低值颜色', type: 'text', span: 'half' },
+        { path: 'props.highColor', label: '高值颜色', type: 'text', span: 'half' },
+        { path: 'props.showValues', label: '显示数值', type: 'checkbox' }
+      ]
+
+    case 'rankingList':
+      return [
+        { path: 'props.title', label: '标题', type: 'text' },
+        {
+          key: 'ranking-names',
+          label: '榜单名称（每行一个）',
+          type: 'textarea',
+          rows: 5,
+          get: () => rankingNames.value,
+          set: (value) => {
+            rankingNames.value = value
+          }
+        },
+        {
+          key: 'ranking-values',
+          label: '榜单数值（逗号分隔）',
+          type: 'textarea',
+          rows: 3,
+          get: () => rankingValues.value,
+          set: (value) => {
+            rankingValues.value = value
+          }
+        },
+        { path: 'props.unit', label: '单位', type: 'text', span: 'half' },
+        { path: 'props.accent', label: '主色', type: 'text', span: 'half' }
+      ]
+
+    case 'image':
+      return [
+        { path: 'props.src', label: '图片地址', type: 'text' },
+        { path: 'props.alt', label: '替代文本', type: 'text' },
+        { path: 'props.caption', label: '图片说明', type: 'text' },
+        {
+          path: 'props.objectFit',
+          label: '铺放方式',
+          type: 'select',
+          options: mediaFitOptions,
+          span: 'half'
+        },
+        { path: 'props.showCaption', label: '显示说明', type: 'checkbox' }
+      ]
+
+    case 'video':
+      return [
+        { path: 'props.src', label: '视频地址', type: 'text' },
+        { path: 'props.poster', label: '封面地址', type: 'text' },
+        { path: 'props.title', label: '视频标题', type: 'text' },
+        {
+          path: 'props.objectFit',
+          label: '铺放方式',
+          type: 'select',
+          options: mediaFitOptions,
+          span: 'half'
+        },
+        { path: 'props.autoplay', label: '自动播放', type: 'checkbox' },
+        { path: 'props.loop', label: '循环播放', type: 'checkbox' },
+        { path: 'props.muted', label: '默认静音', type: 'checkbox' },
+        { path: 'props.controls', label: '显示控件', type: 'checkbox' }
+      ]
+
+    case 'iframe':
+      return [
+        { path: 'props.src', label: '网页地址', type: 'text' },
+        { path: 'props.title', label: '标题', type: 'text' },
+        { path: 'props.showToolbar', label: '显示顶部栏', type: 'checkbox' },
+        { path: 'props.allowFullscreen', label: '允许全屏', type: 'checkbox' },
+        {
+          path: 'props.sandbox',
+          label: 'Sandbox 权限',
+          type: 'text',
+          placeholder: '留空为不设置，例如 allow-scripts allow-same-origin'
+        }
+      ]
+
+    case 'clock':
+      return [
+        { path: 'props.title', label: '标题', type: 'text' },
+        {
+          path: 'props.timeZone',
+          label: '时区',
+          type: 'text',
+          placeholder: '例如 Asia/Shanghai'
+        },
+        {
+          path: 'props.locale',
+          label: '区域语言',
+          type: 'text',
+          placeholder: '例如 zh-CN / en-US'
+        },
+        {
+          path: 'props.zoneLabel',
+          label: '时区标签',
+          type: 'text',
+          placeholder: '留空则自动使用时区名'
+        },
+        { path: 'props.showSeconds', label: '显示秒', type: 'checkbox' },
+        { path: 'props.showDate', label: '显示日期', type: 'checkbox' },
+        { path: 'props.showWeekday', label: '显示星期', type: 'checkbox' },
+        { path: 'props.use24Hour', label: '24 小时制', type: 'checkbox' },
+        { path: 'props.color', label: '时间颜色', type: 'text' },
+        { path: 'props.accent', label: '强调色', type: 'text', span: 'half' },
+        { path: 'props.dateColor', label: '日期颜色', type: 'text', span: 'half' }
+      ]
+
+    case 'noticeTicker':
+      return [
+        { path: 'props.title', label: '标题', type: 'text' },
+        { path: 'props.tag', label: '标签', type: 'text', span: 'half' },
+        {
+          path: 'props.duration',
+          label: '滚动时长（秒）',
+          type: 'number',
+          min: 6,
+          max: 60,
+          span: 'half'
+        },
+        {
+          key: 'notice-items',
+          label: '播报内容（每行一条）',
+          type: 'textarea',
+          rows: 5,
+          get: () => noticeItems.value,
+          set: (value) => {
+            noticeItems.value = value
+          }
+        },
+        {
+          path: 'props.direction',
+          label: '滚动方向',
+          type: 'select',
+          options: tickerDirectionOptions,
+          span: 'half'
+        },
+        { path: 'props.showDot', label: '显示圆点', type: 'checkbox' },
+        { path: 'props.pauseOnHover', label: '悬停暂停', type: 'checkbox' },
+        { path: 'props.accent', label: '强调色', type: 'text' }
+      ]
+
+    case 'tabPanel':
+      return [
+        { path: 'props.title', label: '标题', type: 'text' },
+        { path: 'props.activeIndex', label: '默认激活项', type: 'number', min: 0, span: 'half' },
+        { path: 'props.showTitle', label: '显示标题栏', type: 'checkbox' },
+        {
+          key: 'tab-items',
+          label: 'Tabs 项（标签|数值|单位|说明|附注，每行一项）',
+          type: 'textarea',
+          rows: 6,
+          get: () => tabItems.value,
+          set: (value) => {
+            tabItems.value = value
+          }
+        },
+        { path: 'props.accent', label: '主色', type: 'text', span: 'half' },
+        { path: 'props.secondaryColor', label: '辅助色', type: 'text', span: 'half' }
+      ]
+
+    case 'titleBar':
+      return [
+        { path: 'props.title', label: '标题', type: 'text' },
+        { path: 'props.subtitle', label: '副标题', type: 'text' },
+        { path: 'props.tag', label: '角标', type: 'text', span: 'half' },
+        {
+          path: 'props.align',
+          label: '对齐',
+          type: 'select',
+          options: alignOptions,
+          span: 'half'
+        },
+        { path: 'props.accent', label: '强调色', type: 'text' },
+        { path: 'props.showLine', label: '显示分割线', type: 'checkbox' },
+        { path: 'props.showGlow', label: '显示发光', type: 'checkbox' }
+      ]
+
+    case 'borderFrame':
+      return [
+        { path: 'props.title', label: '标题', type: 'text' },
+        { path: 'props.subtitle', label: '副标题', type: 'text' },
+        { path: 'props.badge', label: '状态角标', type: 'text' },
+        { path: 'props.accent', label: '主色', type: 'text', span: 'half' },
+        { path: 'props.secondaryColor', label: '辅助色', type: 'text', span: 'half' },
+        { path: 'props.showHeader', label: '显示头部', type: 'checkbox' },
+        { path: 'props.showGrid', label: '显示内部网格', type: 'checkbox' },
+        { path: 'props.showGlow', label: '显示边框光晕', type: 'checkbox' }
+      ]
+
+    case 'dataTable':
+      return [
+        { path: 'props.title', label: '标题', type: 'text' },
+        { path: 'props.accent', label: '主色', type: 'text' },
+        {
+          key: 'table-columns',
+          label: '列配置（key|标题，每行一列）',
+          type: 'textarea',
+          rows: 5,
+          get: () => tableColumns.value,
+          set: (value) => {
+            tableColumns.value = value
+          }
+        },
+        {
+          key: 'table-rows',
+          label: '表格数据（按列顺序用 | 分隔）',
+          type: 'textarea',
+          rows: 7,
+          get: () => tableRows.value,
+          set: (value) => {
+            tableRows.value = value
+          }
         }
       ]
 
     case 'gauge':
       return [
-        {
-          path: 'props.title',
-          label: '标题',
-          type: 'text'
-        },
+        { path: 'props.title', label: '标题', type: 'text' },
         {
           path: 'props.value',
           label: '百分比',
@@ -393,38 +633,16 @@ export function createWidgetFields({ widget, barCategories, barValues, lineLabel
           max: 100,
           span: 'half'
         },
-        {
-          path: 'props.color',
-          label: '主色',
-          type: 'text',
-          span: 'half'
-        },
-        {
-          path: 'props.trackColor',
-          label: '轨道色',
-          type: 'text'
-        }
+        { path: 'props.color', label: '主色', type: 'text', span: 'half' },
+        { path: 'props.trackColor', label: '轨道色', type: 'text' }
       ]
 
     case 'panel':
     default:
       return [
-        {
-          path: 'props.title',
-          label: '标题',
-          type: 'text'
-        },
-        {
-          path: 'props.subtitle',
-          label: '副标题',
-          type: 'text'
-        },
-        {
-          path: 'props.content',
-          label: '正文',
-          type: 'textarea',
-          rows: 4
-        }
+        { path: 'props.title', label: '标题', type: 'text' },
+        { path: 'props.subtitle', label: '副标题', type: 'text' },
+        { path: 'props.content', label: '正文', type: 'textarea', rows: 4 }
       ]
   }
 }
@@ -435,10 +653,36 @@ export function getWidgetSectionTitle(type) {
       return '文本内容'
     case 'stat':
       return '指标卡片'
+    case 'digitStat':
+      return '数字翻牌'
     case 'barChart':
       return '柱状图数据'
+    case 'pieChart':
+      return '饼图数据'
     case 'lineChart':
       return '折线图数据'
+    case 'heatmapChart':
+      return '区域热力图'
+    case 'rankingList':
+      return '排行列表'
+    case 'image':
+      return '图片内容'
+    case 'video':
+      return '视频内容'
+    case 'iframe':
+      return '网页嵌入'
+    case 'clock':
+      return '时钟日期'
+    case 'noticeTicker':
+      return '公告跑马灯'
+    case 'tabPanel':
+      return 'Tabs 分区切换'
+    case 'titleBar':
+      return '分区标题条'
+    case 'borderFrame':
+      return '装饰边框'
+    case 'dataTable':
+      return '数据表格'
     case 'gauge':
       return '环形进度'
     case 'panel':

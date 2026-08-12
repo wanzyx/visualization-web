@@ -33,17 +33,23 @@ const HISTORY_MERGE_WINDOW = 600
 const PROJECT_SYNC_DELAY = 120
 const TEMPLATE_LIMIT = 30
 const LINKED_WIDGET_DURATION = 1800
+const PROJECT_LIBRARY_STORAGE_KEY = 'visualization-web-project-library-v1'
+const ACTIVE_PROJECT_STORAGE_KEY = 'visualization-web-active-project-v1'
 
 const initialRoute = getInitialRouteState()
+const initialProjectState = loadProjectState()
 const appMode = ref(initialRoute.mode)
 const previewMode = ref(false)
 const dialogMode = ref(null)
 const dialogText = ref('')
 const templateDraftName = ref('')
+const projectDraftName = ref('')
 const dialogSourceId = ref('')
 const statusMessage = ref('已启用多页面、模板库、数据源和事件联动')
 
-const project = ref(loadProject())
+const project = ref(initialProjectState.project)
+const projectLibrary = ref(initialProjectState.library)
+const activeProjectRecordId = ref(initialProjectState.activeProjectId)
 const templates = ref(loadTemplateLibrary())
 const dataSourceRuntime = ref({})
 const widgetRuntimeState = ref({})
@@ -137,6 +143,12 @@ const canDeletePage = computed(() => project.value.pages.length > 1)
 const hasDataSources = computed(() => project.value.dataSources.length > 0)
 const activeDialogSource = computed(
   () => project.value.dataSources.find((source) => source.id === dialogSourceId.value) ?? null
+)
+const currentProjectRecord = computed(
+  () => projectLibrary.value.find((item) => item.id === activeProjectRecordId.value) ?? null
+)
+const currentProjectName = computed(
+  () => currentProjectRecord.value?.name ?? deriveProjectRecordName(project.value)
 )
 
 function getSourceInteractionLabel(actionType) {
@@ -279,6 +291,111 @@ function toggleRuntimeWidgetHidden(widgetIds) {
   return count
 }
 
+function createProjectRecordId() {
+  return globalThis.crypto?.randomUUID?.() ?? `project-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function createBlankProjectState(name = '页面 1') {
+  const page = createProjectPage(name, {
+    meta: {
+      ...cloneDeep(defaultPageMeta),
+      title: '新建大屏'
+    },
+    widgets: []
+  })
+
+  return {
+    dataSources: [],
+    pages: [page],
+    activePageId: page.id
+  }
+}
+
+function deriveProjectRecordName(projectData) {
+  return (
+    projectData?.pages?.[0]?.meta?.title ||
+    projectData?.pages?.[0]?.name ||
+    projectData?.activePageId ||
+    '未命名项目'
+  )
+}
+
+function normalizeProjectRecord(rawRecord, index = 0) {
+  if (!rawRecord || typeof rawRecord !== 'object' || typeof rawRecord.snapshot !== 'string') {
+    return null
+  }
+
+  try {
+    const normalizedProject = normalizeProjectSchema(JSON.parse(rawRecord.snapshot))
+
+    return {
+      id: typeof rawRecord.id === 'string' && rawRecord.id ? rawRecord.id : `project-${index + 1}`,
+      name:
+        typeof rawRecord.name === 'string' && rawRecord.name.trim()
+          ? rawRecord.name.trim()
+          : deriveProjectRecordName(normalizedProject),
+      updatedAt: Number.isFinite(Number(rawRecord.updatedAt)) ? Number(rawRecord.updatedAt) : Date.now(),
+      snapshot: JSON.stringify(normalizedProject)
+    }
+  } catch (error) {
+    console.warn(error)
+    return null
+  }
+}
+
+function buildProjectRecord(projectData, overrides = {}) {
+  const normalizedProject = normalizeProjectSchema(cloneDeep(projectData))
+
+  return {
+    id: overrides.id ?? createProjectRecordId(),
+    name:
+      typeof overrides.name === 'string' && overrides.name.trim()
+        ? overrides.name.trim()
+        : deriveProjectRecordName(normalizedProject),
+    updatedAt: overrides.updatedAt ?? Date.now(),
+    snapshot: JSON.stringify(normalizedProject)
+  }
+}
+
+function persistProjectLibraryState(library, activeProjectId) {
+  if (typeof localStorage === 'undefined') {
+    return
+  }
+
+  localStorage.setItem(PROJECT_LIBRARY_STORAGE_KEY, JSON.stringify(library))
+
+  if (activeProjectId) {
+    localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, activeProjectId)
+  } else {
+    localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY)
+  }
+}
+
+function loadProjectLibrary() {
+  if (typeof localStorage === 'undefined') {
+    return []
+  }
+
+  const rawValue = localStorage.getItem(PROJECT_LIBRARY_STORAGE_KEY)
+
+  if (!rawValue) {
+    return []
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue)
+
+    if (!Array.isArray(parsed)) {
+      return []
+    }
+
+    return parsed.map((item, index) => normalizeProjectRecord(item, index)).filter(Boolean)
+  } catch (error) {
+    console.warn(error)
+    return []
+  }
+}
+
 function loadProject() {
   if (typeof localStorage === 'undefined') {
     return createDemoProject()
@@ -295,6 +412,34 @@ function loadProject() {
   } catch (error) {
     console.warn(error)
     return createDemoProject()
+  }
+}
+
+function loadProjectState() {
+  const fallbackProject = loadProject()
+  const library = loadProjectLibrary()
+
+  if (!library.length) {
+    const initialRecord = buildProjectRecord(fallbackProject)
+    persistProjectLibraryState([initialRecord], initialRecord.id)
+
+    return {
+      project: normalizeProjectSchema(JSON.parse(initialRecord.snapshot)),
+      library: [initialRecord],
+      activeProjectId: initialRecord.id
+    }
+  }
+
+  const storedActiveId =
+    typeof localStorage === 'undefined' ? '' : localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY) || ''
+  const activeRecord = library.find((item) => item.id === storedActiveId) ?? library[0]
+
+  persistProjectLibraryState(library, activeRecord.id)
+
+  return {
+    project: normalizeProjectSchema(JSON.parse(activeRecord.snapshot)),
+    library,
+    activeProjectId: activeRecord.id
   }
 }
 
@@ -420,6 +565,8 @@ function flushProjectSync() {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem(STORAGE_KEY, nextSnapshot)
   }
+
+  syncActiveProjectRecord(nextSnapshot)
 
   if (!isRestoringHistory.value) {
     const previousSnapshot = lastProjectSnapshot
@@ -1883,6 +2030,242 @@ function ungroupSelected() {
   statusMessage.value = '已取消组件编组'
 }
 
+function applyProjectState(nextProject, options = {}) {
+  project.value = normalizeProjectSchema(cloneDeep(nextProject))
+  lastProjectSnapshot = JSON.stringify(project.value)
+  undoStack.value = []
+  redoStack.value = []
+  pendingHistoryLabel.value = null
+  activeHistoryLabel.value = null
+  currentHistoryLabel.value = '当前项目'
+  lastHistoryCommitAt.value = 0
+  lastHistoryCommitLabel.value = ''
+  appMode.value = 'editor'
+  previewMode.value = false
+  runtimePageId.value = ''
+  clipboardTemplate.value = null
+  cancelInteractionRuns()
+  resetWidgetRuntimeState()
+  clearLinkedWidgetState()
+  syncDataSourceRuntime()
+  syncSourceRefreshTimers()
+  selectDefaultWidget(project.value.pages.find((page) => page.id === project.value.activePageId) ?? currentPage.value)
+
+  if (options.closeDialog !== false) {
+    closeDialog()
+  }
+
+  if (options.statusMessage) {
+    statusMessage.value = options.statusMessage
+  }
+}
+
+function syncActiveProjectRecord(snapshot = JSON.stringify(project.value)) {
+  if (!activeProjectRecordId.value) {
+    return
+  }
+
+  const nextLibrary = projectLibrary.value.map((item) =>
+    item.id === activeProjectRecordId.value
+      ? {
+          ...item,
+          updatedAt: Date.now(),
+          snapshot
+        }
+      : item
+  )
+
+  projectLibrary.value = nextLibrary
+  persistProjectLibraryState(nextLibrary, activeProjectRecordId.value)
+}
+
+function openProjectManagerDialog() {
+  projectDraftName.value = currentProjectName.value
+  dialogMode.value = 'project-library'
+}
+
+function openProjectSaveDialog() {
+  projectDraftName.value = `${currentProjectName.value} 副本`
+  dialogMode.value = 'project-save'
+}
+
+function openProjectCreateDialog() {
+  projectDraftName.value = `导入项目 ${projectLibrary.value.length + 1}`
+  dialogText.value = ''
+  dialogMode.value = 'project-create-import'
+}
+
+function openProjectRecord(recordId, options = {}) {
+  const record = projectLibrary.value.find((item) => item.id === recordId)
+
+  if (!record) {
+    return
+  }
+
+  activeProjectRecordId.value = record.id
+  persistProjectLibraryState(projectLibrary.value, record.id)
+  applyProjectState(JSON.parse(record.snapshot), {
+    closeDialog: options.closeDialog,
+    statusMessage: options.statusMessage ?? `已打开项目：${record.name}`
+  })
+}
+
+function saveProjectAsNewRecord() {
+  const record = buildProjectRecord(project.value, {
+    name: projectDraftName.value
+  })
+
+  projectLibrary.value = [record, ...projectLibrary.value]
+  activeProjectRecordId.value = record.id
+  persistProjectLibraryState(projectLibrary.value, record.id)
+  closeDialog()
+  statusMessage.value = `已另存为项目：${record.name}`
+}
+
+function updateProjectRecordName(recordId, rawName) {
+  const record = projectLibrary.value.find((item) => item.id === recordId)
+
+  if (!record) {
+    return
+  }
+
+  const nextName = rawName.trim() || deriveProjectRecordName(JSON.parse(record.snapshot))
+
+  if (nextName === record.name) {
+    return
+  }
+
+  const nextLibrary = projectLibrary.value.map((item) =>
+    item.id === recordId
+      ? {
+          ...item,
+          name: nextName
+        }
+      : item
+  )
+
+  projectLibrary.value = nextLibrary
+  persistProjectLibraryState(nextLibrary, activeProjectRecordId.value)
+  statusMessage.value = `已重命名项目：${nextName}`
+}
+
+function duplicateProjectRecord(recordId) {
+  const record = projectLibrary.value.find((item) => item.id === recordId)
+
+  if (!record) {
+    return
+  }
+
+  const duplicated = buildProjectRecord(JSON.parse(record.snapshot), {
+    name: `${record.name} 副本`
+  })
+
+  projectLibrary.value = [duplicated, ...projectLibrary.value]
+  persistProjectLibraryState(projectLibrary.value, activeProjectRecordId.value)
+  statusMessage.value = `已复制项目：${duplicated.name}`
+}
+
+function createProjectFromImport() {
+  try {
+    const nextProject = normalizeProjectSchema(JSON.parse(dialogText.value))
+    const record = buildProjectRecord(nextProject, {
+      name: projectDraftName.value || deriveProjectRecordName(nextProject)
+    })
+
+    projectLibrary.value = [record, ...projectLibrary.value]
+    activeProjectRecordId.value = record.id
+    persistProjectLibraryState(projectLibrary.value, record.id)
+    applyProjectState(nextProject, {
+      statusMessage: `已导入项目：${record.name}`
+    })
+  } catch (error) {
+    statusMessage.value = '导入失败，请检查项目 JSON 结构'
+    console.warn(error)
+  }
+}
+
+function createBlankProjectRecord() {
+  const name = `新建项目 ${projectLibrary.value.length + 1}`
+  const record = buildProjectRecord(createBlankProjectState(), { name })
+
+  projectLibrary.value = [record, ...projectLibrary.value]
+  activeProjectRecordId.value = record.id
+  persistProjectLibraryState(projectLibrary.value, record.id)
+  applyProjectState(JSON.parse(record.snapshot), {
+    statusMessage: `已创建项目：${record.name}`
+  })
+}
+
+function togglePreviewMode() {
+  previewMode.value = !previewMode.value
+
+  if (previewMode.value) {
+    void nextTick(() => triggerPageEnterInteractions(currentPageId.value))
+  }
+}
+
+function openRuntimeWorkspace() {
+  enterRuntimeMode()
+  void nextTick(() => triggerPageEnterInteractions(runtimePageId.value || currentPageId.value))
+}
+
+function navigateToPage(pageId, options = {}) {
+  const previousRuntimePageId = runtimePageId.value
+  const previousEditorPageId = project.value.activePageId
+
+  switchPage(pageId, options)
+
+  const activePageId = isRuntimeMode.value ? runtimePageId.value : project.value.activePageId
+  const changed = isRuntimeMode.value
+    ? activePageId !== previousRuntimePageId
+    : activePageId !== previousEditorPageId
+
+  if ((isRuntimeMode.value || previewMode.value || options.previewNavigation) && changed) {
+    void triggerPageEnterInteractions(activePageId)
+  }
+}
+
+function deleteProjectRecord(recordId) {
+  const record = projectLibrary.value.find((item) => item.id === recordId)
+
+  if (!record) {
+    return
+  }
+
+  const deletingActive = activeProjectRecordId.value === recordId
+  const remaining = projectLibrary.value.filter((item) => item.id !== recordId)
+
+  if (!remaining.length) {
+    const fallbackRecord = buildProjectRecord(createBlankProjectState(), {
+      name: '新建项目 1'
+    })
+
+    projectLibrary.value = [fallbackRecord]
+    activeProjectRecordId.value = fallbackRecord.id
+    persistProjectLibraryState(projectLibrary.value, fallbackRecord.id)
+    applyProjectState(JSON.parse(fallbackRecord.snapshot), {
+      closeDialog: false,
+      statusMessage: `已删除项目：${record.name}`
+    })
+    return
+  }
+
+  projectLibrary.value = remaining
+  const nextActiveId = deletingActive ? remaining[0].id : activeProjectRecordId.value
+  activeProjectRecordId.value = nextActiveId
+  persistProjectLibraryState(remaining, nextActiveId)
+
+  if (deletingActive) {
+    openProjectRecord(nextActiveId, {
+      closeDialog: false,
+      statusMessage: `已删除项目：${record.name}`
+    })
+    return
+  }
+
+  statusMessage.value = `已删除项目：${record.name}`
+}
+
 function resetProject() {
   queueHistoryLabel('恢复示例项目')
   project.value = createDemoProject()
@@ -2112,6 +2495,7 @@ function closeDialog() {
   dialogMode.value = null
   dialogText.value = ''
   templateDraftName.value = ''
+  projectDraftName.value = ''
   dialogSourceId.value = ''
 }
 
@@ -2233,7 +2617,7 @@ async function executeInteractionAction(widget, action) {
     }
     case 'switch-page':
       if (action.targetPageId) {
-        switchPage(action.targetPageId, { previewNavigation: true })
+        navigateToPage(action.targetPageId, { previewNavigation: true })
         return true
       }
       return false
@@ -2269,6 +2653,51 @@ async function executeInteractionAction(widget, action) {
   }
 }
 
+async function runWidgetActions(widget, options = {}) {
+  const actions = getInteractionActions(widget.interaction).filter((action) => action.action !== 'none')
+
+  if (!actions.length) {
+    return
+  }
+
+  const token = options.token ?? interactionRunToken
+
+  for (const action of actions) {
+    const canContinue = await waitForInteractionDelay(action.delay ?? 0, token)
+
+    if (!canContinue) {
+      return
+    }
+
+    await executeInteractionAction(widget, action)
+  }
+}
+
+async function triggerPageEnterInteractions(pageId = currentPageId.value) {
+  const page = project.value.pages.find((item) => item.id === pageId)
+
+  if (!page) {
+    return
+  }
+
+  const widgets = page.widgets.filter(
+    (widget) =>
+      (widget.interaction?.trigger || 'click') === 'page-enter' &&
+      getInteractionActions(widget.interaction).some((action) => action.action !== 'none')
+  )
+
+  if (!widgets.length) {
+    return
+  }
+
+  cancelInteractionRuns()
+  const token = interactionRunToken
+
+  for (const widget of widgets) {
+    await runWidgetActions(widget, { token })
+  }
+}
+
 async function handleWidgetAction(widgetId) {
   if (!previewMode.value && !isRuntimeMode.value) {
     return
@@ -2280,24 +2709,10 @@ async function handleWidgetAction(widgetId) {
     return
   }
 
-  const actions = getInteractionActions(widget.interaction).filter((action) => action.action !== 'none')
-
-  if (!actions.length) {
-    return
-  }
-
   cancelInteractionRuns()
-  const token = interactionRunToken
-
-  for (const action of actions) {
-    const canContinue = await waitForInteractionDelay(action.delay ?? 0, token)
-
-    if (!canContinue) {
-      return
-    }
-
-    await executeInteractionAction(widget, action)
-  }
+  await runWidgetActions(widget, {
+    token: interactionRunToken
+  })
 }
 
 function handleKeydown(event) {
@@ -2484,6 +2899,7 @@ onMounted(() => {
     resetWidgetRuntimeState()
     refreshAllDataSources({ silent: true })
     syncSourceRefreshTimers()
+    void nextTick(() => triggerPageEnterInteractions(runtimePageId.value))
   }
 
   window.addEventListener('keydown', handleKeydown)
@@ -2504,6 +2920,7 @@ onBeforeUnmount(() => {
       v-if="!isRuntimeMode"
       :preview-mode="previewMode"
       :pages="project.pages"
+      :project-name="currentProjectName"
       :active-page-id="project.activePageId"
       :can-operate="canOperate"
       :selection-count="selectedIds.length"
@@ -2516,10 +2933,12 @@ onBeforeUnmount(() => {
       :can-save-template="canSaveTemplate"
       :has-data-sources="hasDataSources"
       :runtime-mode="isRuntimeMode"
-      @toggle-preview="previewMode = !previewMode"
-      @open-runtime="enterRuntimeMode"
+      @toggle-preview="togglePreviewMode"
+      @open-runtime="openRuntimeWorkspace"
       @copy-runtime-link="copyRuntimeLink"
-      @select-page="switchPage"
+      @open-project-manager="openProjectManagerDialog"
+      @save-project-copy="openProjectSaveDialog"
+      @select-page="navigateToPage"
       @reset-project="resetProject"
       @export-project="openExportDialog"
       @import-project="openImportDialog"
@@ -2545,7 +2964,7 @@ onBeforeUnmount(() => {
       :active-page-id="currentPageId"
       :linked-widget-ids="linkedWidgetIds"
       :data-source-runtime="dataSourceRuntime"
-      @select-page="switchPage"
+      @select-page="navigateToPage"
       @exit-runtime="exitRuntimeMode"
       @copy-runtime-link="copyRuntimeLink"
       @trigger-widget-action="handleWidgetAction"
@@ -2559,7 +2978,7 @@ onBeforeUnmount(() => {
         :can-delete-page="canDeletePage"
         :materials="materials"
         :templates="templates"
-        @select-page="switchPage"
+        @select-page="navigateToPage"
         @create-page="createPage"
         @duplicate-page="duplicatePage"
         @delete-page="deletePage"
@@ -2667,6 +3086,97 @@ onBeforeUnmount(() => {
 
           <div class="dialog-card__actions">
             <button class="primary" @click="saveSelectionAsTemplate">保存模板</button>
+          </div>
+        </template>
+
+        <template v-else-if="dialogMode === 'project-save'">
+          <div class="dialog-card__header">
+            <div>
+              <p>项目另存</p>
+              <h3>将当前画布另存为新的本地项目</h3>
+            </div>
+            <button class="ghost" @click="closeDialog">关闭</button>
+          </div>
+
+          <label class="dialog-card__field">
+            <span>项目名称</span>
+            <input v-model="projectDraftName" type="text" placeholder="请输入项目名称" />
+          </label>
+
+          <div class="dialog-card__summary">
+            <span>当前内容</span>
+            <strong>{{ project.pages.length }} 个页面 · {{ project.dataSources.length }} 个数据源</strong>
+          </div>
+
+          <div class="dialog-card__actions">
+            <button class="primary" @click="saveProjectAsNewRecord">确认另存</button>
+          </div>
+        </template>
+
+        <template v-else-if="dialogMode === 'project-create-import'">
+          <div class="dialog-card__header">
+            <div>
+              <p>项目导入</p>
+              <h3>将外部 JSON 导入为新的本地项目记录</h3>
+            </div>
+            <button class="ghost" @click="closeDialog">关闭</button>
+          </div>
+
+          <label class="dialog-card__field">
+            <span>项目名称</span>
+            <input v-model="projectDraftName" type="text" placeholder="请输入项目名称" />
+          </label>
+
+          <textarea
+            v-model="dialogText"
+            class="dialog-card__textarea"
+            spellcheck="false"
+            placeholder="请粘贴项目 JSON"
+          />
+
+          <div class="dialog-card__actions">
+            <button class="primary" @click="createProjectFromImport">确认导入</button>
+          </div>
+        </template>
+
+        <template v-else-if="dialogMode === 'project-library'">
+          <div class="dialog-card__header">
+            <div>
+              <p>项目中心</p>
+              <h3>管理本地项目、快速切换和新建空白项目</h3>
+            </div>
+            <button class="ghost" @click="closeDialog">关闭</button>
+          </div>
+
+          <div class="dialog-card__actions dialog-card__actions--split">
+            <button class="ghost" @click="openProjectCreateDialog">导入为新项目</button>
+            <button class="ghost" @click="createBlankProjectRecord">新建空白项目</button>
+            <button class="ghost" @click="openProjectSaveDialog">另存当前项目</button>
+          </div>
+
+          <div class="project-library">
+            <article
+              v-for="record in projectLibrary"
+              :key="record.id"
+              class="project-library__item"
+              :class="{ 'is-active': record.id === activeProjectRecordId }"
+            >
+              <div class="project-library__meta">
+                <input
+                  class="project-library__name"
+                  :value="record.name"
+                  type="text"
+                  @change="updateProjectRecordName(record.id, $event.target.value)"
+                />
+                <span>{{ new Date(record.updatedAt).toLocaleString('zh-CN', { hour12: false }) }}</span>
+              </div>
+
+              <div class="project-library__actions">
+                <button class="ghost" @click="duplicateProjectRecord(record.id)">复制</button>
+                <button class="ghost" @click="openProjectRecord(record.id)">打开</button>
+                <button class="ghost danger" @click="deleteProjectRecord(record.id)">删除</button>
+              </div>
+            </article>
           </div>
         </template>
 
