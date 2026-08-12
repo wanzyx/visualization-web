@@ -2082,6 +2082,13 @@ button.interaction-card__summary:hover {
     radial-gradient(circle at top right, rgba(72, 220, 255, 0.05), transparent 34%);
 }
 
+.data-source-panel__card--unused {
+  border-color: rgba(255, 184, 107, 0.22);
+  background:
+    linear-gradient(180deg, rgba(19, 12, 4, 0.72), rgba(11, 10, 7, 0.56)),
+    radial-gradient(circle at top right, rgba(255, 184, 107, 0.1), transparent 36%);
+}
+
 .data-source-panel__request {
   display: grid;
   gap: 12px;
@@ -2138,6 +2145,13 @@ button.interaction-card__summary:hover {
   font-size: 12px;
 }
 
+.data-source-panel__preview-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .data-source-panel__meta {
   display: flex;
   flex-wrap: wrap;
@@ -2145,6 +2159,78 @@ button.interaction-card__summary:hover {
   gap: 8px 12px;
   color: var(--text-2);
   font-size: 12px;
+}
+
+.data-source-panel__meta-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.data-source-panel__meta-badge--warning {
+  border: 1px solid rgba(255, 184, 107, 0.24);
+  background: rgba(86, 54, 17, 0.34);
+  color: #ffd7a2;
+}
+
+.data-source-panel__usage {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  background: rgba(5, 14, 26, 0.42);
+}
+
+.data-source-panel__usage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.data-source-panel__usage-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.data-source-panel__usage-item {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 12px;
+  text-align: left;
+}
+
+.data-source-panel__usage-item strong,
+.data-source-panel__usage-item span,
+.data-source-panel__usage-item em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-source-panel__usage-item strong {
+  color: var(--text-1);
+  font-size: 12px;
+}
+
+.data-source-panel__usage-item span {
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.data-source-panel__usage-item em {
+  color: var(--brand-2);
+  font-size: 11px;
+  font-style: normal;
 }
 
 .data-source-panel__textarea {

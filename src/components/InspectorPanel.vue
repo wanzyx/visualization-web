@@ -76,6 +76,10 @@ const props = defineProps({
     type: Object,
     default: () => ({})
   },
+  sourceUsageMap: {
+    type: Object,
+    default: () => ({})
+  },
   sourceBindingCounts: {
     type: Object,
     default: () => ({})
@@ -94,11 +98,14 @@ defineEmits([
   'create-source',
   'copy-all-sources-config',
   'clear-all-source-runtime',
+  'remove-unused-sources',
+  'locate-source-usage',
   'delete-source',
   'duplicate-source',
   'export-source',
   'import-source',
   'import-source-as-new',
+  'apply-source-runtime-payload',
   'copy-source-runtime-payload',
   'refresh-source',
   'refresh-all-sources',
@@ -826,15 +833,19 @@ function isTargetSourceSelected(sourceId, action = selectedInteractionAction.val
     <DataSourcePanel
       :data-sources="project.dataSources"
       :binding-counts="sourceBindingCounts"
+      :source-usages="sourceUsageMap"
       :data-source-runtime="dataSourceRuntime"
       @create-source="$emit('create-source', $event)"
       @copy-all-sources-config="$emit('copy-all-sources-config')"
       @clear-all-source-runtime="$emit('clear-all-source-runtime')"
+      @remove-unused-sources="$emit('remove-unused-sources')"
+      @locate-source-usage="$emit('locate-source-usage', $event)"
       @delete-source="$emit('delete-source', $event)"
       @duplicate-source="$emit('duplicate-source', $event)"
       @export-source="$emit('export-source', $event)"
       @import-source="$emit('import-source', $event)"
       @import-source-as-new="$emit('import-source-as-new')"
+      @apply-source-runtime-payload="$emit('apply-source-runtime-payload', $event)"
       @copy-source-runtime-payload="$emit('copy-source-runtime-payload', $event)"
       @refresh-source="$emit('refresh-source', $event)"
       @refresh-all-sources="$emit('refresh-all-sources')"

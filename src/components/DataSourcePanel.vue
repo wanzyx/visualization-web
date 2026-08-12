@@ -18,6 +18,10 @@ const props = defineProps({
     type: Object,
     default: () => ({})
   },
+  sourceUsages: {
+    type: Object,
+    default: () => ({})
+  },
   dataSourceRuntime: {
     type: Object,
     default: () => ({})
@@ -28,11 +32,14 @@ const emit = defineEmits([
   'create-source',
   'copy-all-sources-config',
   'clear-all-source-runtime',
+  'remove-unused-sources',
+  'locate-source-usage',
   'delete-source',
   'duplicate-source',
   'export-source',
   'import-source',
   'import-source-as-new',
+  'apply-source-runtime-payload',
   'copy-source-runtime-payload',
   'refresh-source',
   'refresh-all-sources',
@@ -43,6 +50,7 @@ const emit = defineEmits([
 ])
 
 const draftType = ref('stat')
+const SOURCE_USAGE_LIMIT = 6
 
 function formatPayload(payload) {
   return JSON.stringify(payload, null, 2)
@@ -111,6 +119,10 @@ function getMappedFieldCount(sourceId) {
   return getRuntimeEntry(sourceId).mappedFieldCount ?? 0
 }
 
+function getRefreshCount(sourceId) {
+  return getRuntimeEntry(sourceId).refreshCount ?? 0
+}
+
 function formatDebugValue(value) {
   if (value === null || value === undefined || value === '') {
     return ''
@@ -131,6 +143,10 @@ function getExtractedPreview(sourceId) {
   return formatDebugValue(getRuntimeEntry(sourceId).extractedPreview)
 }
 
+function getRuntimePayloadPreview(sourceId) {
+  return formatDebugValue(getRuntimeEntry(sourceId).payload)
+}
+
 function hasRequestPreview(sourceId) {
   return Boolean(getRequestPreview(sourceId))
 }
@@ -141,6 +157,29 @@ function hasResponsePreview(sourceId) {
 
 function hasExtractedPreview(sourceId) {
   return Boolean(getExtractedPreview(sourceId))
+}
+
+function hasRuntimePayloadPreview(sourceId) {
+  return Boolean(getRuntimePayloadPreview(sourceId))
+}
+
+function shouldShowRuntimePreview(source) {
+  const runtime = getRuntimeEntry(source.id)
+
+  return source.generator !== 'static' || Boolean(runtime.updatedAt) || Boolean(runtime.error)
+}
+
+function canClearRuntime(sourceId) {
+  const runtime = getRuntimeEntry(sourceId)
+
+  return Boolean(
+    runtime.updatedAt ||
+      runtime.refreshCount ||
+      runtime.error ||
+      runtime.requestPreview ||
+      runtime.responsePreview ||
+      runtime.extractedPreview
+  )
 }
 
 function getPayloadTitle(source) {
@@ -167,6 +206,30 @@ function emitCopyDebug(sourceId, target) {
     target
   })
 }
+
+function getBindingCount(sourceId) {
+  return props.bindingCounts[sourceId] ?? 0
+}
+
+function isUnusedSource(sourceId) {
+  return getBindingCount(sourceId) <= 0
+}
+
+function getUnusedSourceCount() {
+  return props.dataSources.filter((source) => isUnusedSource(source.id)).length
+}
+
+function getSourceUsages(sourceId) {
+  return props.sourceUsages[sourceId] ?? []
+}
+
+function getVisibleSourceUsages(sourceId) {
+  return getSourceUsages(sourceId).slice(0, SOURCE_USAGE_LIMIT)
+}
+
+function hasMoreSourceUsages(sourceId) {
+  return getSourceUsages(sourceId).length > SOURCE_USAGE_LIMIT
+}
 </script>
 
 <template>
@@ -182,6 +245,14 @@ function emitCopyDebug(sourceId, target) {
       </button>
       <button class="ghost inspector-inline-button" type="button" @click="$emit('clear-all-source-runtime')">
         清空调试
+      </button>
+      <button
+        v-if="getUnusedSourceCount() > 0"
+        class="ghost inspector-inline-button"
+        type="button"
+        @click="$emit('remove-unused-sources')"
+      >
+        清理未使用
       </button>
       <button class="ghost inspector-inline-button" type="button" @click="$emit('refresh-all-sources')">
         全部刷新
@@ -206,7 +277,12 @@ function emitCopyDebug(sourceId, target) {
     </div>
 
     <div v-if="dataSources.length" class="data-source-panel__list">
-      <article v-for="source in dataSources" :key="source.id" class="data-source-panel__card">
+      <article
+        v-for="source in dataSources"
+        :key="source.id"
+        class="data-source-panel__card"
+        :class="{ 'data-source-panel__card--unused': isUnusedSource(source.id) }"
+      >
         <label>
           <span>名称</span>
           <input v-model="source.name" type="text" />
@@ -246,8 +322,39 @@ function emitCopyDebug(sourceId, target) {
         </label>
 
         <div class="data-source-panel__meta">
+          <span
+            v-if="isUnusedSource(source.id)"
+            class="data-source-panel__meta-badge data-source-panel__meta-badge--warning"
+          >
+            未使用
+          </span>
           <span>绑定组件：{{ bindingCounts[source.id] ?? 0 }} 个</span>
           <span>最近刷新：{{ formatRuntimeTime(getRuntimeEntry(source.id).updatedAt) }}</span>
+        </div>
+
+        <div v-if="getSourceUsages(source.id).length" class="data-source-panel__usage">
+          <div class="data-source-panel__usage-head">
+            <span>引用位置</span>
+            <span>{{ getSourceUsages(source.id).length }} 处</span>
+          </div>
+
+          <div class="data-source-panel__usage-list">
+            <button
+              v-for="usage in getVisibleSourceUsages(source.id)"
+              :key="usage.id"
+              class="ghost data-source-panel__usage-item"
+              type="button"
+              @click="$emit('locate-source-usage', usage)"
+            >
+              <strong>{{ usage.pageName }}</strong>
+              <span>{{ usage.widgetName }}</span>
+              <em>{{ usage.label }}</em>
+            </button>
+          </div>
+
+          <p v-if="hasMoreSourceUsages(source.id)" class="inspector-tip">
+            仅显示前 {{ SOURCE_USAGE_LIMIT }} 条引用
+          </p>
         </div>
 
         <div v-if="isRemoteSource(source)" class="data-source-panel__request">
@@ -430,15 +537,46 @@ function emitCopyDebug(sourceId, target) {
           {{ getRuntimeError(source.id) }}
         </div>
 
-        <div v-if="isRemoteSource(source)" class="data-source-panel__preview">
+        <div v-if="shouldShowRuntimePreview(source)" class="data-source-panel__preview">
           <div class="data-source-panel__preview-meta">
-            <span>最近状态：{{ getRuntimeStatusLabel(source.id) }}</span>
-            <span>映射字段：{{ getMappedFieldCount(source.id) }}</span>
-            <div class="data-source-panel__preview-actions">
+            <span v-if="isRemoteSource(source)">最近状态：{{ getRuntimeStatusLabel(source.id) }}</span>
+            <span v-else>最近刷新：{{ formatRuntimeTime(getRuntimeEntry(source.id).updatedAt) }}</span>
+            <span v-if="isRemoteSource(source)">映射字段：{{ getMappedFieldCount(source.id) }}</span>
+            <span v-else>刷新次数：{{ getRefreshCount(source.id) }}</span>
+            <div v-if="canClearRuntime(source.id)" class="data-source-panel__preview-actions">
               <button class="ghost data-source-panel__mini-button" type="button" @click="$emit('clear-source-runtime', source.id)">
                 清空调试
               </button>
             </div>
+          </div>
+
+          <div v-if="hasRuntimePayloadPreview(source.id)" class="data-source-panel__preview-block">
+            <div class="data-source-panel__preview-head">
+              <span>运行值预览</span>
+              <div class="data-source-panel__preview-buttons">
+                <button
+                  class="ghost data-source-panel__mini-button"
+                  type="button"
+                  @click="$emit('apply-source-runtime-payload', source.id)"
+                >
+                  设为默认值
+                </button>
+                <button
+                  class="ghost data-source-panel__mini-button"
+                  type="button"
+                  @click="$emit('copy-source-runtime-payload', source.id)"
+                >
+                  复制
+                </button>
+              </div>
+            </div>
+            <textarea
+              class="data-source-panel__textarea data-source-panel__textarea--preview"
+              :value="getRuntimePayloadPreview(source.id)"
+              rows="6"
+              readonly
+              spellcheck="false"
+            />
           </div>
 
           <div v-if="hasRequestPreview(source.id)" class="data-source-panel__preview-block">
@@ -491,13 +629,6 @@ function emitCopyDebug(sourceId, target) {
         </div>
 
         <div class="data-source-panel__actions">
-          <button
-            class="ghost data-source-panel__action-button"
-            type="button"
-            @click="$emit('copy-source-runtime-payload', source.id)"
-          >
-            运行值
-          </button>
           <button class="ghost data-source-panel__action-button" type="button" @click="$emit('export-source', source.id)">
             导出
           </button>

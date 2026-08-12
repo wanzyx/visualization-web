@@ -139,21 +139,80 @@ const activeDialogSource = computed(
   () => project.value.dataSources.find((source) => source.id === dialogSourceId.value) ?? null
 )
 
-const sourceBindingCounts = computed(() => {
-  const counts = Object.fromEntries(project.value.dataSources.map((source) => [source.id, 0]))
+function getSourceInteractionLabel(actionType) {
+  switch (actionType) {
+    case 'refresh-sources':
+      return '交互刷新'
+    case 'highlight-widgets':
+      return '交互高亮'
+    case 'switch-page':
+      return '交互切页'
+    case 'show-widgets':
+      return '交互显示'
+    case 'hide-widgets':
+      return '交互隐藏'
+    case 'toggle-widgets-visibility':
+      return '交互显隐切换'
+    default:
+      return '交互引用'
+  }
+}
+
+const sourceUsageMap = computed(() => {
+  const usages = Object.fromEntries(project.value.dataSources.map((source) => [source.id, []]))
 
   project.value.pages.forEach((page) => {
     page.widgets.forEach((widget) => {
       const sourceId = widget.dataBinding?.sourceId
 
       if (sourceId) {
-        counts[sourceId] = (counts[sourceId] ?? 0) + 1
+        ;(usages[sourceId] ??= []).push({
+          id: `binding-${page.id}-${widget.id}`,
+          sourceId,
+          pageId: page.id,
+          pageName: page.name,
+          widgetId: widget.id,
+          widgetName: widget.name,
+          type: 'binding',
+          label: '数据绑定'
+        })
       }
+
+      const actions = Array.isArray(widget.interaction?.actions)
+        ? widget.interaction.actions
+        : getInteractionActions(widget.interaction)
+
+      actions.forEach((action, actionIndex) => {
+        ;(action.targetSourceIds ?? []).forEach((targetSourceId) => {
+          if (targetSourceId) {
+            ;(usages[targetSourceId] ??= []).push({
+              id: `action-${page.id}-${widget.id}-${action.id ?? actionIndex}-${targetSourceId}`,
+              sourceId: targetSourceId,
+              pageId: page.id,
+              pageName: page.name,
+              widgetId: widget.id,
+              widgetName: widget.name,
+              type: 'interaction',
+              label: getSourceInteractionLabel(action.action)
+            })
+          }
+        })
+      })
     })
   })
 
-  return counts
+  return usages
 })
+
+const sourceBindingCounts = computed(() =>
+  Object.fromEntries(
+    project.value.dataSources.map((source) => [source.id, sourceUsageMap.value[source.id]?.length ?? 0])
+  )
+)
+
+function getSourceUsages(sourceId) {
+  return sourceUsageMap.value[sourceId] ?? []
+}
 
 function cloneDeep(value) {
   return JSON.parse(JSON.stringify(value))
@@ -713,6 +772,34 @@ async function copySourceRuntimePayload(sourceId) {
   })
 }
 
+function applySourceRuntimePayload(sourceId) {
+  const source = project.value.dataSources.find((item) => item.id === sourceId)
+
+  if (!source) {
+    return false
+  }
+
+  const runtime = dataSourceRuntime.value[source.id] ?? createSourceRuntimeEntry(source)
+  const runtimePayload = runtime.payload
+
+  if (!runtimePayload || typeof runtimePayload !== 'object' || Array.isArray(runtimePayload)) {
+    statusMessage.value = `数据源 ${source.name} 当前没有可应用的运行值`
+    return false
+  }
+
+  queueHistoryLabel('应用运行值')
+  source.payload = cloneDeep(runtimePayload)
+  dataSourceRuntime.value = {
+    ...dataSourceRuntime.value,
+    [source.id]: createSourceRuntimeEntry(source, {
+      ...runtime,
+      payload: cloneDeep(runtimePayload)
+    })
+  }
+  statusMessage.value = `已将 ${source.name} 的运行值设为默认 payload`
+  return true
+}
+
 function clearSourceRuntime(sourceId, options = {}) {
   const source = project.value.dataSources.find((item) => item.id === sourceId)
 
@@ -977,7 +1064,7 @@ function applySourceImport() {
   }
 }
 
-function createSourceFromImport() {
+function legacyCreateSourceFromImport() {
   try {
     const normalizedSources = parseImportedSourceConfigs(dialogText.value, { allowMultiple: true })
     const importedSources = normalizedSources.map((normalized) =>
@@ -1022,7 +1109,7 @@ function createSourceFromImport() {
   }
 }
 
-function deleteSource(sourceId) {
+function legacyDeleteSource(sourceId) {
   const source = project.value.dataSources.find((item) => item.id === sourceId)
 
   if (!source) {
@@ -1047,6 +1134,104 @@ function deleteSource(sourceId) {
   delete nextRuntime[sourceId]
   dataSourceRuntime.value = nextRuntime
   statusMessage.value = `已删除数据源：${source.name}`
+}
+
+function createSourceFromImport() {
+  try {
+    const normalizedSources = parseImportedSourceConfigs(dialogText.value, { allowMultiple: true })
+    const importedSources = normalizedSources.map((normalized) =>
+      createDataSource(normalized.type, {
+        name: normalized.name,
+        generator: normalized.generator,
+        refreshInterval: normalized.refreshInterval,
+        request: cloneDeep(normalized.request),
+        payload: cloneDeep(normalized.payload)
+      })
+    )
+
+    queueHistoryLabel(importedSources.length > 1 ? '批量导入数据源' : '导入数据源')
+    project.value.dataSources = [...importedSources, ...project.value.dataSources]
+    importedSources.forEach((source) => {
+      resetSourceRuntime(source)
+    })
+    closeDialog()
+    statusMessage.value =
+      importedSources.length > 1
+        ? `已批量导入 ${importedSources.length} 个数据源`
+        : `已导入并新建数据源：${importedSources[0].name}`
+  } catch (error) {
+    statusMessage.value = '数据源配置导入失败，请检查 JSON 结构'
+    console.warn(error)
+  }
+}
+
+function removeSources(sourceIds, options = {}) {
+  const uniqueSourceIds = Array.from(new Set(sourceIds.filter(Boolean)))
+
+  if (!uniqueSourceIds.length) {
+    return []
+  }
+
+  const sourceIdSet = new Set(uniqueSourceIds)
+  const removedSources = project.value.dataSources.filter((item) => sourceIdSet.has(item.id))
+
+  if (!removedSources.length) {
+    return []
+  }
+
+  queueHistoryLabel(
+    options.historyLabel ?? (removedSources.length > 1 ? '批量删除数据源' : '删除数据源')
+  )
+  project.value.dataSources = project.value.dataSources.filter((item) => !sourceIdSet.has(item.id))
+
+  project.value.pages.forEach((page) => {
+    page.widgets.forEach((widget) => {
+      if (sourceIdSet.has(widget.dataBinding?.sourceId)) {
+        widget.dataBinding.sourceId = ''
+      }
+    })
+  })
+
+  cleanupInteractionReferences({
+    sourceIds: uniqueSourceIds
+  })
+
+  const nextRuntime = { ...dataSourceRuntime.value }
+  uniqueSourceIds.forEach((sourceId) => {
+    delete nextRuntime[sourceId]
+  })
+  dataSourceRuntime.value = nextRuntime
+
+  statusMessage.value =
+    options.successMessage ??
+    (removedSources.length > 1
+      ? `已批量删除 ${removedSources.length} 个数据源`
+      : `已删除数据源：${removedSources[0].name}`)
+
+  return removedSources
+}
+
+function removeUnusedSources() {
+  const unusedSources = project.value.dataSources.filter(
+    (source) => (sourceBindingCounts.value[source.id] ?? 0) <= 0
+  )
+
+  if (!unusedSources.length) {
+    statusMessage.value = '当前没有可清理的未使用数据源'
+    return
+  }
+
+  removeSources(
+    unusedSources.map((source) => source.id),
+    {
+      historyLabel: '清理未使用数据源',
+      successMessage: `已清理 ${unusedSources.length} 个未使用数据源`
+    }
+  )
+}
+
+function deleteSource(sourceId) {
+  removeSources([sourceId])
 }
 
 function changeSourceType(payload) {
@@ -1127,6 +1312,41 @@ function switchPage(pageId, options = {}) {
   }
 
   statusMessage.value = `已切换页面：${nextPage.name}`
+}
+
+function locateSourceUsage(usage) {
+  const pageId = usage?.pageId
+  const widgetId = usage?.widgetId
+
+  if (!pageId || !widgetId) {
+    return
+  }
+
+  const targetPage = project.value.pages.find((page) => page.id === pageId)
+  const targetWidget = targetPage?.widgets.find((widget) => widget.id === widgetId)
+
+  if (!targetPage || !targetWidget) {
+    statusMessage.value = '引用组件不存在，可能已经被删除'
+    return
+  }
+
+  if (isRuntimeMode.value) {
+    appMode.value = 'editor'
+    runtimePageId.value = ''
+  }
+
+  if (previewMode.value) {
+    previewMode.value = false
+  }
+
+  if (project.value.activePageId !== targetPage.id) {
+    project.value.activePageId = targetPage.id
+    clearLinkedWidgetState()
+  }
+
+  sanitizeSelection([targetWidget.id], targetWidget.id)
+  flashLinkedWidgets([targetWidget.id])
+  statusMessage.value = `已定位到 ${targetPage.name} / ${targetWidget.name}`
 }
 
 function createPage() {
@@ -2380,6 +2600,7 @@ onBeforeUnmount(() => {
         :can-undo="canUndo"
         :can-redo="canRedo"
         :data-source-runtime="dataSourceRuntime"
+        :source-usage-map="sourceUsageMap"
         :source-binding-counts="sourceBindingCounts"
         @select-layer="handleLayerSelection"
         @toggle-layer-hidden="toggleLayerHidden"
@@ -2392,10 +2613,13 @@ onBeforeUnmount(() => {
         @create-source="createSource"
         @copy-all-sources-config="copyAllSourcesConfig"
         @clear-all-source-runtime="clearAllSourceRuntime"
+        @remove-unused-sources="removeUnusedSources"
+        @locate-source-usage="locateSourceUsage"
         @duplicate-source="duplicateSource"
         @export-source="openSourceExportDialog"
         @import-source="openSourceImportDialog"
         @import-source-as-new="openSourceCreateDialog"
+        @apply-source-runtime-payload="applySourceRuntimePayload"
         @copy-source-runtime-payload="copySourceRuntimePayload"
         @delete-source="deleteSource"
         @clear-source-runtime="clearSourceRuntime"
