@@ -53,6 +53,7 @@ const activeProjectRecordId = ref(initialProjectState.activeProjectId)
 const templates = ref(loadTemplateLibrary())
 const dataSourceRuntime = ref({})
 const widgetRuntimeState = ref({})
+const runtimeFilters = ref({})
 const linkedWidgetIds = ref([])
 const runtimePageId = ref(initialRoute.pageId || '')
 const clipboardTemplate = ref(null)
@@ -80,15 +81,24 @@ const currentPage = computed(() => {
 
 const runtimeWidgets = computed(() =>
   (currentPage.value?.widgets ?? []).map((widget) => {
-    const runtimeHidden = widgetRuntimeState.value[widget.id]?.hidden
-
-    if (runtimeHidden === undefined) {
-      return widget
-    }
+    const runtimeState = widgetRuntimeState.value[widget.id] ?? {}
+    const runtimeHidden = runtimeState.hidden
+    const propsPatch =
+      runtimeState.propsPatch &&
+      typeof runtimeState.propsPatch === 'object' &&
+      !Array.isArray(runtimeState.propsPatch)
+        ? runtimeState.propsPatch
+        : null
 
     return {
       ...widget,
-      hidden: runtimeHidden
+      hidden: runtimeHidden ?? widget.hidden,
+      props: propsPatch
+        ? {
+            ...widget.props,
+            ...propsPatch
+          }
+        : widget.props
     }
   })
 )
@@ -232,6 +242,163 @@ function cloneDeep(value) {
 
 function resetWidgetRuntimeState() {
   widgetRuntimeState.value = {}
+}
+
+function resetRuntimeFilters() {
+  runtimeFilters.value = {}
+
+  const nextState = {}
+
+  Object.entries(widgetRuntimeState.value).forEach(([widgetId, state]) => {
+    const currentState = state && typeof state === 'object' ? { ...state } : {}
+    const nextPropsPatch =
+      currentState.propsPatch &&
+      typeof currentState.propsPatch === 'object' &&
+      !Array.isArray(currentState.propsPatch)
+        ? { ...currentState.propsPatch }
+        : null
+
+    if (nextPropsPatch && 'activeValue' in nextPropsPatch) {
+      delete nextPropsPatch.activeValue
+    }
+
+    if (nextPropsPatch && Object.keys(nextPropsPatch).length) {
+      currentState.propsPatch = nextPropsPatch
+    } else {
+      delete currentState.propsPatch
+    }
+
+    if (Object.keys(currentState).length) {
+      nextState[widgetId] = currentState
+    }
+  })
+
+  widgetRuntimeState.value = nextState
+}
+
+function setRuntimeWidgetPropsPatch(widgetId, propsPatch = {}) {
+  if (!widgetId) {
+    return
+  }
+
+  const widget = project.value.pages
+    .flatMap((page) => page.widgets)
+    .find((item) => item.id === widgetId)
+
+  if (!widget) {
+    return
+  }
+
+  const currentState = widgetRuntimeState.value[widgetId] ?? {}
+  const currentPatch =
+    currentState.propsPatch && typeof currentState.propsPatch === 'object' && !Array.isArray(currentState.propsPatch)
+      ? currentState.propsPatch
+      : {}
+
+  widgetRuntimeState.value = {
+    ...widgetRuntimeState.value,
+    [widgetId]: {
+      ...currentState,
+      propsPatch: {
+        ...currentPatch,
+        ...propsPatch
+      }
+    }
+  }
+}
+
+function applyRuntimeFilterWidget(widget, value, label = '') {
+  if (!widget || widget.type !== 'filterBar') {
+    return
+  }
+
+  const field = String(widget.props?.field ?? '').trim()
+  const nextValue = String(value ?? '').trim()
+  const targetWidgetIds = Array.isArray(widget.props?.targetWidgetIds)
+    ? widget.props.targetWidgetIds.filter((item) => typeof item === 'string' && item)
+    : []
+
+  setRuntimeWidgetPropsPatch(widget.id, {
+    activeValue: nextValue
+  })
+
+  if (!field || !nextValue) {
+    const nextFilters = { ...runtimeFilters.value }
+    delete nextFilters[widget.id]
+    runtimeFilters.value = nextFilters
+    return
+  }
+
+  runtimeFilters.value = {
+    ...runtimeFilters.value,
+    [widget.id]: {
+      widgetId: widget.id,
+      field,
+      value: nextValue,
+      label: String(label || '').trim(),
+      targetWidgetIds
+    }
+  }
+}
+
+function syncPageRuntimeFilters(pageId = currentPageId.value) {
+  if (!previewMode.value && !isRuntimeMode.value) {
+    return
+  }
+
+  const page = project.value.pages.find((item) => item.id === pageId)
+
+  if (!page) {
+    return
+  }
+
+  page.widgets
+    .filter((widget) => widget.type === 'filterBar')
+    .forEach((widget) => {
+      const runtimeWidget = buildRuntimeWidgetView(widget) ?? widget
+      const activeValue = String(runtimeWidget.props?.activeValue ?? '').trim()
+      const option = (Array.isArray(runtimeWidget.props?.options) ? runtimeWidget.props.options : []).find(
+        (item) => String(item?.value ?? '').trim() === activeValue
+      )
+
+      applyRuntimeFilterWidget(runtimeWidget, activeValue, String(option?.label ?? '').trim())
+    })
+}
+
+function findWidgetAcrossPages(widgetId) {
+  if (!widgetId) {
+    return null
+  }
+
+  return (
+    currentPage.value?.widgets.find((item) => item.id === widgetId) ??
+    project.value.pages.flatMap((page) => page.widgets).find((item) => item.id === widgetId) ??
+    null
+  )
+}
+
+function buildRuntimeWidgetView(widget) {
+  if (!widget) {
+    return null
+  }
+
+  const sourceId = widget.dataBinding?.sourceId
+  const runtimePayload = sourceId ? dataSourceRuntime.value[sourceId]?.payload ?? null : null
+  const propsPatch =
+    widgetRuntimeState.value[widget.id]?.propsPatch &&
+    typeof widgetRuntimeState.value[widget.id].propsPatch === 'object' &&
+    !Array.isArray(widgetRuntimeState.value[widget.id].propsPatch)
+      ? widgetRuntimeState.value[widget.id].propsPatch
+      : null
+
+  return {
+    ...widget,
+    props: {
+      ...widget.props,
+      ...(runtimePayload ?? {}),
+      ...(propsPatch ?? {})
+    }
+  }
 }
 
 function setRuntimeWidgetHidden(widgetIds, hidden) {
@@ -1131,6 +1298,7 @@ function enterRuntimeMode() {
   cancelInteractionRuns()
   previewMode.value = false
   resetWidgetRuntimeState()
+  resetRuntimeFilters()
   clearLinkedWidgetState()
   runtimePageId.value = currentPageId.value || project.value.activePageId || project.value.pages[0]?.id || ''
   appMode.value = 'runtime'
@@ -1142,6 +1310,7 @@ function enterRuntimeMode() {
 function exitRuntimeMode() {
   cancelInteractionRuns()
   resetWidgetRuntimeState()
+  resetRuntimeFilters()
   const pageId = currentPageId.value
 
   if (pageId) {
@@ -2200,13 +2369,19 @@ function togglePreviewMode() {
   previewMode.value = !previewMode.value
 
   if (previewMode.value) {
-    void nextTick(() => triggerPageEnterInteractions(currentPageId.value))
+    void nextTick(() => {
+      syncPageRuntimeFilters(currentPageId.value)
+      triggerPageEnterInteractions(currentPageId.value)
+    })
   }
 }
 
 function openRuntimeWorkspace() {
   enterRuntimeMode()
-  void nextTick(() => triggerPageEnterInteractions(runtimePageId.value || currentPageId.value))
+  void nextTick(() => {
+    syncPageRuntimeFilters(runtimePageId.value || currentPageId.value)
+    triggerPageEnterInteractions(runtimePageId.value || currentPageId.value)
+  })
 }
 
 function navigateToPage(pageId, options = {}) {
@@ -2221,6 +2396,8 @@ function navigateToPage(pageId, options = {}) {
     : activePageId !== previousEditorPageId
 
   if ((isRuntimeMode.value || previewMode.value || options.previewNavigation) && changed) {
+    resetRuntimeFilters()
+    syncPageRuntimeFilters(activePageId)
     void triggerPageEnterInteractions(activePageId)
   }
 }
@@ -2715,6 +2892,42 @@ async function handleWidgetAction(widgetId) {
   })
 }
 
+function handleWidgetCommand(payload = {}) {
+  if (!previewMode.value && !isRuntimeMode.value) {
+    return
+  }
+
+  const widget = findWidgetAcrossPages(payload.widgetId)
+  const runtimeWidget = buildRuntimeWidgetView(widget)
+
+  if (!runtimeWidget) {
+    return
+  }
+
+  if (payload.command === 'apply-filter' && runtimeWidget.type === 'filterBar') {
+    const nextValue = String(payload.value ?? '').trim()
+    const nextLabel = String(payload.label ?? '').trim()
+
+    applyRuntimeFilterWidget(runtimeWidget, nextValue, nextLabel)
+    statusMessage.value = nextValue
+      ? `Filter applied: ${runtimeWidget.props?.title || runtimeWidget.name} / ${nextLabel || nextValue}`
+      : `Filter cleared: ${runtimeWidget.props?.title || runtimeWidget.name}`
+    return
+  }
+
+  if (payload.command === 'select-region' && runtimeWidget.type === 'chinaRegionMap') {
+    const nextValue = String(payload.value ?? '').trim()
+
+    setRuntimeWidgetPropsPatch(runtimeWidget.id, {
+      activeProvince: nextValue
+    })
+
+    statusMessage.value = nextValue
+      ? `Map focus: ${runtimeWidget.props?.title || runtimeWidget.name} / ${nextValue}`
+      : `Map focus cleared: ${runtimeWidget.props?.title || runtimeWidget.name}`
+  }
+}
+
 function handleKeydown(event) {
   if (dialogMode.value) {
     if (event.key === 'Escape') {
@@ -2880,6 +3093,7 @@ watch(previewMode, (enabled) => {
 
   cancelInteractionRuns()
   resetWidgetRuntimeState()
+  resetRuntimeFilters()
   clearLinkedWidgetState()
   syncSourceRefreshTimers()
 
@@ -2964,10 +3178,12 @@ onBeforeUnmount(() => {
       :active-page-id="currentPageId"
       :linked-widget-ids="linkedWidgetIds"
       :data-source-runtime="dataSourceRuntime"
+      :runtime-filters="runtimeFilters"
       @select-page="navigateToPage"
       @exit-runtime="exitRuntimeMode"
       @copy-runtime-link="copyRuntimeLink"
       @trigger-widget-action="handleWidgetAction"
+      @widget-command="handleWidgetCommand"
     />
 
     <section v-else class="workspace">
@@ -2994,12 +3210,14 @@ onBeforeUnmount(() => {
         :preview-mode="previewMode"
         :linked-widget-ids="linkedWidgetIds"
         :data-source-runtime="dataSourceRuntime"
+        :runtime-filters="runtimeFilters"
         @selection-change="updateSelection"
         @add-widget="addWidget"
         @add-template="addTemplate"
         @history-session-start="startHistorySession"
         @history-session-end="endHistorySession"
         @trigger-widget-action="handleWidgetAction"
+        @widget-command="handleWidgetCommand"
       />
 
       <InspectorPanel

@@ -231,8 +231,13 @@ export function createWidgetFields({
   heatmapXLabels,
   heatmapYLabels,
   heatmapMatrix,
+  chinaMapItems,
+  chinaMapPoints,
+  chinaMapLinks,
   noticeItems,
   tabItems,
+  filterOptions,
+  timelineItems,
   rankingNames,
   rankingValues,
   tableColumns,
@@ -273,7 +278,7 @@ export function createWidgetFields({
         { path: 'props.value', label: '数值', type: 'text', span: 'half' },
         { path: 'props.unit', label: '单位', type: 'text', span: 'half' },
         { path: 'props.trend', label: '趋势', type: 'number', step: 0.1, span: 'half' },
-        { path: 'props.trendLabel', label: '趋势描述', type: 'text', span: 'half' },
+        { path: 'props.trendLabel', label: '趋势说明', type: 'text', span: 'half' },
         { path: 'props.color', label: '主色', type: 'text' },
         { path: 'props.accent', label: '强调色', type: 'text' }
       ]
@@ -368,8 +373,8 @@ export function createWidgetFields({
             lineValues.value = value
           }
         },
-        { path: 'props.color', label: '线条颜色', type: 'text' },
-        { path: 'props.areaColor', label: '区域颜色', type: 'text' }
+        { path: 'props.color', label: '线条颜色', type: 'text', span: 'half' },
+        { path: 'props.areaColor', label: '面积颜色', type: 'text', span: 'half' }
       ]
 
     case 'heatmapChart':
@@ -408,6 +413,50 @@ export function createWidgetFields({
         { path: 'props.lowColor', label: '低值颜色', type: 'text', span: 'half' },
         { path: 'props.highColor', label: '高值颜色', type: 'text', span: 'half' },
         { path: 'props.showValues', label: '显示数值', type: 'checkbox' }
+      ]
+
+    case 'chinaRegionMap':
+      return [
+        { path: 'props.title', label: '\u6807\u9898', type: 'text' },
+        { path: 'props.unit', label: '\u5355\u4f4d', type: 'text', span: 'half' },
+        { path: 'props.accent', label: '\u5f3a\u8c03\u8272', type: 'text', span: 'half' },
+        { path: 'props.activeProvince', label: '\u9ed8\u8ba4\u805a\u7126\u7701\u4efd', type: 'text' },
+        { path: 'props.enableDrilldown', label: '\u542f\u7528\u70b9\u51fb\u4e0b\u94bb', type: 'checkbox' },
+        {
+          key: 'china-map-items',
+          label: '\u7701\u4efd\u6570\u636e\uff08\u7701\u4efd|\u6570\u503c\uff0c\u6bcf\u884c\u4e00\u6761\uff09',
+          type: 'textarea',
+          rows: 8,
+          get: () => chinaMapItems.value,
+          set: (value) => {
+            chinaMapItems.value = value
+          }
+        },
+        {
+          key: 'china-map-points',
+          label: '\u6563\u70b9\u6570\u636e\uff08\u7701\u4efd|\u6570\u503c|\u5206\u7c7b|\u989c\u8272|\u5927\u5c0f\uff0c\u6bcf\u884c\u4e00\u6761\uff09',
+          type: 'textarea',
+          rows: 6,
+          get: () => chinaMapPoints.value,
+          set: (value) => {
+            chinaMapPoints.value = value
+          }
+        },
+        {
+          key: 'china-map-links',
+          label: '\u98de\u7ebf\u6570\u636e\uff08\u8d77\u70b9|\u7ec8\u70b9|\u6570\u503c|\u989c\u8272\uff0c\u6bcf\u884c\u4e00\u6761\uff09',
+          type: 'textarea',
+          rows: 5,
+          get: () => chinaMapLinks.value,
+          set: (value) => {
+            chinaMapLinks.value = value
+          }
+        },
+        { path: 'props.showScatter', label: '\u663e\u793a\u6563\u70b9', type: 'checkbox' },
+        { path: 'props.showFlightLines', label: '\u663e\u793a\u98de\u7ebf', type: 'checkbox' },
+        { path: 'props.lowColor', label: '\u4f4e\u503c\u989c\u8272', type: 'text', span: 'half' },
+        { path: 'props.highColor', label: '\u9ad8\u503c\u989c\u8272', type: 'text', span: 'half' },
+        { path: 'props.showLegend', label: '\u663e\u793a\u56fe\u4f8b', type: 'checkbox' },
       ]
 
     case 'rankingList':
@@ -480,7 +529,7 @@ export function createWidgetFields({
           path: 'props.sandbox',
           label: 'Sandbox 权限',
           type: 'text',
-          placeholder: '留空为不设置，例如 allow-scripts allow-same-origin'
+          placeholder: '例如 allow-scripts allow-same-origin'
         }
       ]
 
@@ -565,6 +614,48 @@ export function createWidgetFields({
         },
         { path: 'props.accent', label: '主色', type: 'text', span: 'half' },
         { path: 'props.secondaryColor', label: '辅助色', type: 'text', span: 'half' }
+      ]
+
+    case 'filterBar':
+      return [
+        { path: 'props.title', label: '标题', type: 'text' },
+        { path: 'props.field', label: '筛选字段', type: 'text', span: 'half' },
+        { path: 'props.activeValue', label: '默认值', type: 'text', span: 'half' },
+        { path: 'props.showTitle', label: '显示标题', type: 'checkbox' },
+        { path: 'props.allowClear', label: '允许取消', type: 'checkbox' },
+        {
+          key: 'filter-options',
+          label: '筛选项（标签|值|数量，每行一条）',
+          type: 'textarea',
+          rows: 6,
+          get: () => filterOptions.value,
+          set: (value) => {
+            filterOptions.value = value
+          }
+        },
+        { path: 'props.accent', label: '主色', type: 'text', span: 'half' },
+        { path: 'props.secondaryColor', label: '辅助色', type: 'text', span: 'half' }
+      ]
+
+    case 'timelinePanel':
+      return [
+        { path: 'props.title', label: '标题', type: 'text' },
+        { path: 'props.subtitle', label: '副标题', type: 'text' },
+        { path: 'props.activeIndex', label: '高亮节点', type: 'number', min: 0, span: 'half' },
+        { path: 'props.showPulse', label: '显示脉冲', type: 'checkbox' },
+        {
+          key: 'timeline-items',
+          label: '时间轴节点（时间|标题|说明|标签|状态，每行一条）',
+          type: 'textarea',
+          rows: 7,
+          get: () => timelineItems.value,
+          set: (value) => {
+            timelineItems.value = value
+          }
+        },
+        { path: 'props.accent', label: '主色', type: 'text', span: 'half' },
+        { path: 'props.secondaryColor', label: '辅助色', type: 'text', span: 'half' },
+        { path: 'props.showConnector', label: '显示连接线', type: 'checkbox' }
       ]
 
     case 'titleBar':
@@ -663,8 +754,10 @@ export function getWidgetSectionTitle(type) {
       return '折线图数据'
     case 'heatmapChart':
       return '区域热力图'
+    case 'chinaRegionMap':
+      return '\u4e2d\u56fd\u5730\u56fe'
     case 'rankingList':
-      return '排行列表'
+      return '排行榜列表'
     case 'image':
       return '图片内容'
     case 'video':
@@ -677,8 +770,12 @@ export function getWidgetSectionTitle(type) {
       return '公告跑马灯'
     case 'tabPanel':
       return 'Tabs 分区切换'
+    case 'filterBar':
+      return '联动筛选条'
+    case 'timelinePanel':
+      return '时间轴'
     case 'titleBar':
-      return '分区标题条'
+      return '分区标题栏'
     case 'borderFrame':
       return '装饰边框'
     case 'dataTable':

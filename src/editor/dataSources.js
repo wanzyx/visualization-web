@@ -216,6 +216,49 @@ const sourceSpecs = {
       showValues: true
     })
   },
+  chinaRegionMap: {
+    label: '\u4e2d\u56fd\u5730\u56fe',
+    generators: [
+      { value: 'static', label: '\u9759\u6001\u6570\u636e' },
+      { value: 'regionPulse', label: '\u533a\u57df\u6ce2\u52a8' },
+      { value: 'remote', label: 'HTTP \u63a5\u53e3' }
+    ],
+    createPayload: () => ({
+      title: '\u5168\u56fd\u4e1a\u52a1\u5206\u5e03',
+      unit: '\u70b9',
+      lowColor: 'rgba(70, 238, 255, 0.08)',
+      highColor: '#46eeff',
+      accent: '#7bfecb',
+      showLegend: true,
+      enableDrilldown: true,
+      showScatter: true,
+      showFlightLines: true,
+      activeProvince: '',
+      items: [
+        { name: '\u5e7f\u4e1c', value: 96 },
+        { name: '\u6c5f\u82cf', value: 88 },
+        { name: '\u6d59\u6c5f', value: 84 },
+        { name: '\u5c71\u4e1c', value: 76 },
+        { name: '\u56db\u5ddd', value: 69 },
+        { name: '\u6e56\u5317', value: 63 },
+        { name: '\u5317\u4eac', value: 58 },
+        { name: '\u4e0a\u6d77', value: 55 },
+        { name: '\u798f\u5efa', value: 49 },
+        { name: '\u6cb3\u5357', value: 45 }
+      ],
+      points: [
+        { name: '\u5317\u4eac', value: 82, category: '\u67a2\u7ebd', color: '#46eeff', size: 18 },
+        { name: '\u4e0a\u6d77', value: 76, category: '\u95e8\u6237', color: '#7bfecb', size: 16 },
+        { name: '\u5e7f\u4e1c', value: 91, category: '\u4ea4\u6613', color: '#ffd66b', size: 18 },
+        { name: '\u56db\u5ddd', value: 63, category: '\u4e2d\u8f6c', color: '#6d8bff', size: 15 }
+      ],
+      links: [
+        { from: '\u5317\u4eac', to: '\u4e0a\u6d77', value: 128, color: 'rgba(70, 238, 255, 0.75)' },
+        { from: '\u5e7f\u4e1c', to: '\u56db\u5ddd', value: 96, color: 'rgba(123, 254, 203, 0.7)' },
+        { from: '\u6e56\u5317', to: '\u6d59\u6c5f', value: 74, color: 'rgba(255, 214, 107, 0.72)' }
+      ]
+    })
+  },
   rankingList: {
     label: '排行列表',
     generators: [
@@ -361,6 +404,76 @@ const sourceSpecs = {
           unit: '%',
           description: '主设备在线率维持高位，建议继续跟进两台边缘节点。',
           meta: '在线率'
+        }
+      ]
+    })
+  },
+  filterBar: {
+    label: '联动筛选条',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      title: '状态筛选',
+      field: 'status',
+      activeValue: '',
+      showTitle: true,
+      allowClear: true,
+      accent: '#46eeff',
+      secondaryColor: 'rgba(123, 254, 203, 0.16)',
+      targetWidgetIds: [],
+      options: [
+        { label: '已完成', value: 'done', count: 12 },
+        { label: '进行中', value: 'active', count: 5 },
+        { label: '待处理', value: 'pending', count: 9 },
+        { label: '预警', value: 'warning', count: 2 }
+      ]
+    })
+  },
+  timelinePanel: {
+    label: '时间轴',
+    generators: [
+      { value: 'static', label: '静态数据' },
+      { value: 'timelinePulse', label: '时间轴轮播' },
+      { value: 'remote', label: 'HTTP 接口' }
+    ],
+    createPayload: () => ({
+      title: '事件处理时间轴',
+      subtitle: 'Timeline Overview',
+      activeIndex: 1,
+      accent: '#46eeff',
+      secondaryColor: 'rgba(123, 254, 203, 0.16)',
+      showPulse: true,
+      showConnector: true,
+      items: [
+        {
+          time: '08:30',
+          title: '异常发现',
+          description: '北区入口客流连续 5 分钟高于阈值，系统自动生成预警。',
+          tag: '告警触发',
+          status: 'done'
+        },
+        {
+          time: '08:42',
+          title: '联动研判',
+          description: '值班人员调取现场视频与历史波峰，确认属于短时集中入场。',
+          tag: '处理中',
+          status: 'active'
+        },
+        {
+          time: '08:55',
+          title: '现场分流',
+          description: '引导屏切换绕行提示，并通知安保执行双通道放行。',
+          tag: '待执行',
+          status: 'pending'
+        },
+        {
+          time: '09:10',
+          title: '结果复盘',
+          description: '预计 09:10 完成现场恢复，并同步更新今日峰值记录。',
+          tag: '待完成',
+          status: 'pending'
         }
       ]
     })
@@ -531,6 +644,15 @@ export function getRemoteFieldMappingTemplate(type) {
       highColor: 'highColor',
       showValues: 'showValues'
     },
+    chinaRegionMap: {
+      title: 'title',
+      unit: 'unit',
+      lowColor: 'lowColor',
+      highColor: 'highColor',
+      accent: 'accent',
+      showLegend: 'showLegend',
+      items: 'items'
+    },
     rankingList: {
       title: 'title',
       unit: 'unit',
@@ -587,6 +709,27 @@ export function getRemoteFieldMappingTemplate(type) {
       showTitle: 'showTitle',
       accent: 'accent',
       secondaryColor: 'secondaryColor',
+      items: 'items'
+    },
+    filterBar: {
+      title: 'title',
+      field: 'field',
+      activeValue: 'activeValue',
+      showTitle: 'showTitle',
+      allowClear: 'allowClear',
+      accent: 'accent',
+      secondaryColor: 'secondaryColor',
+      targetWidgetIds: 'targetWidgetIds',
+      options: 'options'
+    },
+    timelinePanel: {
+      title: 'title',
+      subtitle: 'subtitle',
+      activeIndex: 'activeIndex',
+      accent: 'accent',
+      secondaryColor: 'secondaryColor',
+      showPulse: 'showPulse',
+      showConnector: 'showConnector',
       items: 'items'
     },
     titleBar: {
@@ -735,6 +878,60 @@ function createHeatmapPayload(basePayload) {
   }
 }
 
+function createChinaRegionMapPayload(basePayload) {
+  const items = Array.isArray(basePayload.items) ? basePayload.items : []
+  const points = Array.isArray(basePayload.points) ? basePayload.points : []
+  const links = Array.isArray(basePayload.links) ? basePayload.links : []
+
+  return {
+    ...basePayload,
+    items: items
+      .map((item, index) => {
+        const seed = Number(item?.value ?? 18 + index * 4)
+
+        return {
+          name: String(item?.name ?? '').trim(),
+          value: Math.max(
+            0,
+            Math.round((Number.isFinite(seed) ? seed : 18 + index * 4) + randomBetween(-6, 9))
+          )
+        }
+      })
+      .filter((item) => item.name)
+      .sort((left, right) => right.value - left.value),
+    points: points
+      .map((item, index) => {
+        const seed = Number(item?.value ?? 24 + index * 5)
+
+        return {
+          ...item,
+          name: String(item?.name ?? '').trim(),
+          value: Math.max(
+            0,
+            Math.round((Number.isFinite(seed) ? seed : 24 + index * 5) + randomBetween(-7, 10))
+          )
+        }
+      })
+      .filter((item) => item.name),
+    links: links
+      .map((item, index) => {
+        const seed = Number(item?.value ?? 36 + index * 8)
+
+        return {
+          ...item,
+          from: String(item?.from ?? '').trim(),
+          to: String(item?.to ?? '').trim(),
+          value: Math.max(
+            0,
+            Math.round((Number.isFinite(seed) ? seed : 36 + index * 8) + randomBetween(-9, 12))
+          )
+        }
+      })
+      .filter((item) => item.from && item.to)
+  }
+}
+
+
 function createPiePayload(basePayload) {
   const categories = Array.isArray(basePayload.categories) ? basePayload.categories.filter(Boolean) : []
   const values = Array.isArray(basePayload.values) ? basePayload.values : []
@@ -849,6 +1046,41 @@ function createTabPanelPayload(basePayload) {
     ...basePayload,
     items,
     activeIndex: items.length ? (Math.max(0, Math.trunc(baseIndex)) + 1) % items.length : 0
+  }
+}
+
+function normalizeTimelineStatus(value, fallback = 'pending') {
+  const status = String(value || '').trim().toLowerCase()
+
+  if (['done', 'active', 'pending', 'warning'].includes(status)) {
+    return status
+  }
+
+  return fallback
+}
+
+function createTimelinePanelPayload(basePayload) {
+  const items = Array.isArray(basePayload.items)
+    ? basePayload.items.map((item, index) => ({
+        time: String(item?.time ?? '').trim() || `${8 + index}:00`,
+        title: String(item?.title ?? `节点 ${index + 1}`).trim() || `节点 ${index + 1}`,
+        description: String(item?.description ?? '').trim(),
+        tag: String(item?.tag ?? '').trim(),
+        status: normalizeTimelineStatus(item?.status)
+      }))
+    : []
+  const total = items.length
+  const baseIndex = Math.max(0, Math.trunc(Number(basePayload.activeIndex ?? 0)))
+  const nextIndex = total ? (baseIndex + 1) % total : 0
+
+  return {
+    ...basePayload,
+    subtitle: `最近刷新 ${formatClock()}`,
+    activeIndex: nextIndex,
+    items: items.map((item, index) => ({
+      ...item,
+      status: index < nextIndex ? 'done' : index === nextIndex ? 'active' : 'pending'
+    }))
   }
 }
 
@@ -1318,6 +1550,24 @@ function normalizeRemotePayload(type, extracted, basePayload) {
             }
           })
         }
+      case 'chinaRegionMap':
+        return {
+          ...basePayload,
+          items: extracted.map((item, index) => {
+            if (item && typeof item === 'object' && !Array.isArray(item)) {
+              return {
+                name: String(item.name ?? item.label ?? item.title ?? `区域 ${index + 1}`).trim(),
+                value: Number(item.value ?? item.count ?? item.total ?? 0)
+              }
+            }
+
+            const baseItems = Array.isArray(basePayload.items) ? basePayload.items : []
+            return {
+              name: String(baseItems[index]?.name ?? `区域 ${index + 1}`),
+              value: Number(item ?? 0)
+            }
+          }).filter((item) => item.name)
+        }
       case 'dataTable':
         return {
           ...basePayload,
@@ -1375,6 +1625,49 @@ function normalizeRemotePayload(type, extracted, basePayload) {
             }
           })
         }
+      case 'filterBar':
+        return {
+          ...basePayload,
+          options: extracted.map((item, index) => {
+            if (item && typeof item === 'object' && !Array.isArray(item)) {
+              const rawValue = item.value ?? item.id ?? item.code ?? item.name ?? item.label ?? `${index + 1}`
+              return {
+                label: String(item.label ?? item.name ?? item.title ?? rawValue).trim(),
+                value: String(rawValue).trim(),
+                count: Number(item.count ?? item.total ?? item.valueCount ?? 0)
+              }
+            }
+
+            return {
+              label: String(item ?? '').trim() || `选项 ${index + 1}`,
+              value: String(item ?? '').trim() || `${index + 1}`,
+              count: 0
+            }
+          })
+        }
+      case 'timelinePanel':
+        return {
+          ...basePayload,
+          items: extracted.map((item, index) => {
+            if (item && typeof item === 'object' && !Array.isArray(item)) {
+              return {
+                time: String(item.time ?? item.timestamp ?? item.date ?? '').trim(),
+                title: String(item.title ?? item.name ?? item.label ?? `节点 ${index + 1}`).trim(),
+                description: String(item.description ?? item.desc ?? item.summary ?? '').trim(),
+                tag: String(item.tag ?? item.meta ?? item.statusLabel ?? '').trim(),
+                status: normalizeTimelineStatus(item.status ?? item.state ?? item.level)
+              }
+            }
+
+            return {
+              time: '',
+              title: String(item ?? '').trim() || `节点 ${index + 1}`,
+              description: '',
+              tag: '',
+              status: 'pending'
+            }
+          })
+        }
       case 'panel':
         return {
           ...basePayload,
@@ -1408,12 +1701,27 @@ function normalizeRemotePayload(type, extracted, basePayload) {
         ...basePayload,
         title: String(extracted)
       }
+    case 'chinaRegionMap':
+      return {
+        ...basePayload,
+        title: String(extracted)
+      }
     case 'noticeTicker':
       return {
         ...basePayload,
         items: [String(extracted)]
       }
     case 'tabPanel':
+      return {
+        ...basePayload,
+        title: String(extracted)
+      }
+    case 'filterBar':
+      return {
+        ...basePayload,
+        title: String(extracted)
+      }
+    case 'timelinePanel':
       return {
         ...basePayload,
         title: String(extracted)
@@ -1562,6 +1870,8 @@ export function generateDataSourcePayload(source) {
       return createPiePayload(basePayload)
     case 'heatmapPulse':
       return createHeatmapPayload(basePayload)
+    case 'regionPulse':
+      return createChinaRegionMapPayload(basePayload)
     case 'rankPulse':
       return createRankingPayload(basePayload)
     case 'tablePulse':
@@ -1576,6 +1886,8 @@ export function generateDataSourcePayload(source) {
       return createNoticeTickerPayload(basePayload)
     case 'tabPulse':
       return createTabPanelPayload(basePayload)
+    case 'timelinePulse':
+      return createTimelinePanelPayload(basePayload)
     case 'panelDigest':
       return createPanelPayload(basePayload)
     case 'clockTick':

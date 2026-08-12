@@ -44,6 +44,10 @@ const props = defineProps({
   dataSourceRuntime: {
     type: Object,
     default: () => ({})
+  },
+  runtimeFilters: {
+    type: Object,
+    default: () => ({})
   }
 })
 
@@ -53,7 +57,8 @@ const emit = defineEmits([
   'add-template',
   'history-session-start',
   'history-session-end',
-  'trigger-widget-action'
+  'trigger-widget-action',
+  'widget-command'
 ])
 
 const containerRef = ref(null)
@@ -656,6 +661,10 @@ function handleWidgetSelect(payload) {
 
 function handleWidgetAction(payload) {
   emit('trigger-widget-action', payload.widgetId)
+}
+
+function handleWidgetCommand(payload) {
+  emit('widget-command', payload)
 }
 
 function beginInteraction(payload, mode) {
@@ -1365,10 +1374,12 @@ watch(
             :can-move="!widget.locked"
             :linked-active="isLinkedActive(widget.id)"
             :data-source-runtime="dataSourceRuntime"
+            :runtime-filters="runtimeFilters"
             @select="handleWidgetSelect"
             @drag-start="beginInteraction($event, 'move')"
             @resize-start="beginInteraction($event, 'resize')"
             @trigger-action="handleWidgetAction"
+            @widget-command="handleWidgetCommand"
           />
 
           <button

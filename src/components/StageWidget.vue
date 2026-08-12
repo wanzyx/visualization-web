@@ -10,12 +10,17 @@ import IframeWidget from './renderers/IframeWidget.vue'
 import ClockWidget from './renderers/ClockWidget.vue'
 import NoticeTickerWidget from './renderers/NoticeTickerWidget.vue'
 import TabPanelWidget from './renderers/TabPanelWidget.vue'
+import FilterBarWidget from './renderers/FilterBarWidget.vue'
+import TimelinePanelWidget from './renderers/TimelinePanelWidget.vue'
+import ChinaRegionMapWidget from './renderers/ChinaRegionMapWidget.vue'
 import TitleBarWidget from './renderers/TitleBarWidget.vue'
 import BorderFrameWidget from './renderers/BorderFrameWidget.vue'
 import { getInteractionActions } from '../editor/project'
+import { applyWidgetRuntimeFilters, getWidgetRuntimeFilters } from '../editor/runtimeFilters'
 
 const BarChartWidget = defineAsyncComponent(() => import('./renderers/BarChartWidget.vue'))
 const LineChartWidget = defineAsyncComponent(() => import('./renderers/LineChartWidget.vue'))
+const HeatmapChartWidget = defineAsyncComponent(() => import('./renderers/HeatmapChartWidget.vue'))
 const PieChartWidget = defineAsyncComponent(() => import('./renderers/PieChartWidget.vue'))
 const RankingListWidget = defineAsyncComponent(() => import('./renderers/RankingListWidget.vue'))
 const DataTableWidget = defineAsyncComponent(() => import('./renderers/DataTableWidget.vue'))
@@ -53,10 +58,14 @@ const props = defineProps({
   dataSourceRuntime: {
     type: Object,
     default: () => ({})
+  },
+  runtimeFilters: {
+    type: Object,
+    default: () => ({})
   }
 })
 
-const emit = defineEmits(['select', 'drag-start', 'resize-start', 'trigger-action'])
+const emit = defineEmits(['select', 'drag-start', 'resize-start', 'trigger-action', 'widget-command'])
 
 const componentMap = {
   text: TextWidget,
@@ -68,10 +77,14 @@ const componentMap = {
   clock: ClockWidget,
   noticeTicker: NoticeTickerWidget,
   tabPanel: TabPanelWidget,
+  filterBar: FilterBarWidget,
+  timelinePanel: TimelinePanelWidget,
+  chinaRegionMap: ChinaRegionMapWidget,
   titleBar: TitleBarWidget,
   borderFrame: BorderFrameWidget,
   barChart: BarChartWidget,
   lineChart: LineChartWidget,
+  heatmapChart: HeatmapChartWidget,
   pieChart: PieChartWidget,
   rankingList: RankingListWidget,
   dataTable: DataTableWidget,
@@ -129,23 +142,50 @@ const displayWidget = computed(() => {
   const sourceId = props.widget.dataBinding?.sourceId
 
   if (!sourceId) {
-    return props.widget
+    const runtimeFilters = getWidgetRuntimeFilters(props.widget.id, props.runtimeFilters)
+    return {
+      ...props.widget,
+      props: applyWidgetRuntimeFilters(props.widget, runtimeFilters)
+    }
   }
 
   const runtimePayload = props.dataSourceRuntime[sourceId]?.payload
 
   if (!runtimePayload) {
-    return props.widget
-  }
-
-  return {
-    ...props.widget,
-    props: {
-      ...props.widget.props,
-      ...runtimePayload
+    const runtimeFilters = getWidgetRuntimeFilters(props.widget.id, props.runtimeFilters)
+    return {
+      ...props.widget,
+      props: applyWidgetRuntimeFilters(props.widget, runtimeFilters)
     }
   }
+
+  const mergedProps = {
+    ...props.widget.props,
+    ...runtimePayload
+  }
+
+  if (props.widget.type === 'filterBar' && Object.hasOwn(props.widget.props, 'activeValue')) {
+    mergedProps.activeValue = props.widget.props.activeValue
+  }
+
+  const mergedWidget = {
+    ...props.widget,
+    props: mergedProps
+  }
+  const runtimeFilters = getWidgetRuntimeFilters(props.widget.id, props.runtimeFilters)
+
+  return {
+    ...mergedWidget,
+    props: applyWidgetRuntimeFilters(mergedWidget, runtimeFilters)
+  }
 })
+
+function handleWidgetCommand(command) {
+  emit('widget-command', {
+    widgetId: props.widget.id,
+    ...(command ?? {})
+  })
+}
 
 function emitTriggerAction(event) {
   emit('trigger-action', {
@@ -252,7 +292,12 @@ function handleFrameMouseEnter(event) {
       @dblclick.stop="handleFrameDoubleClick"
       @mouseenter="handleFrameMouseEnter"
     >
-      <component :is="renderer" :widget="displayWidget" :preview-mode="previewMode" />
+      <component
+        :is="renderer"
+        :widget="displayWidget"
+        :preview-mode="previewMode"
+        @widget-command="handleWidgetCommand"
+      />
       <span v-if="!previewMode" class="stage-widget__name">{{ widget.name }}</span>
       <span v-if="widget.groupId && !previewMode" class="stage-widget__group-badge">G</span>
       <span v-if="widget.locked && !previewMode" class="stage-widget__lock-badge">锁定</span>

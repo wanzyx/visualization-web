@@ -134,6 +134,52 @@ const library = {
       showValues: true
     }
   },
+  chinaRegionMap: {
+    type: 'chinaRegionMap',
+    label: '\u4e2d\u56fd\u5730\u56fe',
+    description:
+      '\u9002\u5408\u5c55\u793a\u7701\u7ea7\u70ed\u5ea6\u5206\u5e03\uff0c\u5e76\u53ef\u53e0\u52a0\u6563\u70b9\u3001\u98de\u7ebf\u548c\u70b9\u51fb\u4e0b\u94bb\u3002',
+    icon: 'CN',
+    size: { w: 620, h: 360 },
+    style: {
+      ...defaultStyle
+    },
+    props: {
+      title: '\u5168\u56fd\u4e1a\u52a1\u5206\u5e03',
+      unit: '\u70b9',
+      lowColor: 'rgba(70, 238, 255, 0.08)',
+      highColor: '#46eeff',
+      accent: '#7bfecb',
+      showLegend: true,
+      enableDrilldown: true,
+      showScatter: true,
+      showFlightLines: true,
+      activeProvince: '',
+      items: [
+        { name: '\u5e7f\u4e1c', value: 96 },
+        { name: '\u6c5f\u82cf', value: 88 },
+        { name: '\u6d59\u6c5f', value: 84 },
+        { name: '\u5c71\u4e1c', value: 76 },
+        { name: '\u56db\u5ddd', value: 69 },
+        { name: '\u6e56\u5317', value: 63 },
+        { name: '\u5317\u4eac', value: 58 },
+        { name: '\u4e0a\u6d77', value: 55 },
+        { name: '\u798f\u5efa', value: 49 },
+        { name: '\u6cb3\u5357', value: 45 }
+      ],
+      points: [
+        { name: '\u5317\u4eac', value: 82, category: '\u67a2\u7ebd', color: '#46eeff', size: 18 },
+        { name: '\u4e0a\u6d77', value: 76, category: '\u95e8\u6237', color: '#7bfecb', size: 16 },
+        { name: '\u5e7f\u4e1c', value: 91, category: '\u4ea4\u6613', color: '#ffd66b', size: 18 },
+        { name: '\u56db\u5ddd', value: 63, category: '\u4e2d\u8f6c', color: '#6d8bff', size: 15 }
+      ],
+      links: [
+        { from: '\u5317\u4eac', to: '\u4e0a\u6d77', value: 128, color: 'rgba(70, 238, 255, 0.75)' },
+        { from: '\u5e7f\u4e1c', to: '\u56db\u5ddd', value: 96, color: 'rgba(123, 254, 203, 0.7)' },
+        { from: '\u6e56\u5317', to: '\u6d59\u6c5f', value: 74, color: 'rgba(255, 214, 107, 0.72)' }
+      ]
+    }
+  },
   pieChart: {
     type: 'pieChart',
     label: '饼图',
@@ -320,6 +366,86 @@ const library = {
           unit: '%',
           description: '主设备在线率维持高位，建议继续跟进两台边缘节点。',
           meta: '在线率'
+        }
+      ]
+    }
+  },
+  filterBar: {
+    type: 'filterBar',
+    label: '联动筛选条',
+    description: '适合大屏顶部条件切换，可联动过滤排行、表格、区域分布和时间轴',
+    icon: 'FLT',
+    size: { w: 620, h: 104 },
+    style: {
+      ...defaultStyle,
+      background: 'linear-gradient(180deg, rgba(8, 20, 38, 0.92), rgba(4, 10, 20, 0.84))',
+      radius: 22,
+      padding: 14
+    },
+    props: {
+      title: '状态筛选',
+      field: 'status',
+      activeValue: '',
+      showTitle: true,
+      allowClear: true,
+      accent: '#46eeff',
+      secondaryColor: 'rgba(123, 254, 203, 0.16)',
+      targetWidgetIds: [],
+      options: [
+        { label: '已完成', value: 'done', count: 12 },
+        { label: '进行中', value: 'active', count: 5 },
+        { label: '待处理', value: 'pending', count: 9 },
+        { label: '预警', value: 'warning', count: 2 }
+      ]
+    }
+  },
+  timelinePanel: {
+    type: 'timelinePanel',
+    label: '时间轴',
+    description: '适合展示事件演进、任务节点、工单流程和告警处置时间线',
+    icon: 'TML',
+    size: { w: 620, h: 360 },
+    style: {
+      ...defaultStyle,
+      background: 'linear-gradient(180deg, rgba(8, 20, 38, 0.94), rgba(4, 10, 20, 0.88))',
+      padding: 18
+    },
+    props: {
+      title: '事件处理时间轴',
+      subtitle: 'Timeline Overview',
+      activeIndex: 1,
+      accent: '#46eeff',
+      secondaryColor: 'rgba(123, 254, 203, 0.16)',
+      showPulse: true,
+      showConnector: true,
+      items: [
+        {
+          time: '08:30',
+          title: '异常发现',
+          description: '北区入口客流连续 5 分钟高于阈值，系统自动生成预警。',
+          tag: '告警触发',
+          status: 'done'
+        },
+        {
+          time: '08:42',
+          title: '联动研判',
+          description: '值班人员调取现场视频与历史波峰，确认属于短时集中入场。',
+          tag: '处理中',
+          status: 'active'
+        },
+        {
+          time: '08:55',
+          title: '现场分流',
+          description: '引导屏切换绕行提示，并通知安保执行双通道放行。',
+          tag: '待执行',
+          status: 'pending'
+        },
+        {
+          time: '09:10',
+          title: '结果复盘',
+          description: '预计 09:10 完成现场恢复，并同步更新今日峰值记录。',
+          tag: '待完成',
+          status: 'pending'
         }
       ]
     }

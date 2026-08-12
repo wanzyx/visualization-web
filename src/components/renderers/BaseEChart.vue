@@ -5,8 +5,13 @@ const props = defineProps({
   option: {
     type: Object,
     required: true
+  },
+  runtime: {
+    type: String,
+    default: 'core'
   }
 })
+const emit = defineEmits(['chart-click'])
 
 const chartElement = shallowRef(null)
 const isChartReady = ref(false)
@@ -15,18 +20,54 @@ let chart = null
 let resizeObserver = null
 let disposed = false
 let echartsModulePromise = null
+let loadedRuntime = ''
+let resizeFrameId = 0
+
+const runtimeLoaders = {
+  core: () => import('../../lib/echarts-core.js'),
+  'china-map': () => import('../../lib/echarts-china-map-runtime.js')
+}
 
 function renderChart() {
   if (!chart || !props.option) {
     return
   }
 
-  chart.setOption(props.option, true)
+  chart.setOption(props.option, {
+    notMerge: true,
+    lazyUpdate: true
+  })
+}
+
+function scheduleResize() {
+  if (!chart) {
+    return
+  }
+
+  cancelAnimationFrame(resizeFrameId)
+  resizeFrameId = requestAnimationFrame(() => {
+    resizeFrameId = 0
+    chart?.resize()
+  })
+}
+
+function bindChartEvents() {
+  if (!chart) {
+    return
+  }
+
+  chart.off('click')
+  chart.on('click', (params) => {
+    emit('chart-click', params)
+  })
 }
 
 async function loadECharts() {
-  if (!echartsModulePromise) {
-    echartsModulePromise = import('../../lib/echarts-runtime.js')
+  const runtimeKey = runtimeLoaders[props.runtime] ? props.runtime : 'core'
+
+  if (!echartsModulePromise || loadedRuntime !== runtimeKey) {
+    loadedRuntime = runtimeKey
+    echartsModulePromise = runtimeLoaders[runtimeKey]()
   }
 
   return echartsModulePromise
@@ -50,11 +91,12 @@ async function initChart() {
   })
 
   isChartReady.value = true
+  bindChartEvents()
   renderChart()
 
   resizeObserver?.disconnect()
   resizeObserver = new ResizeObserver(() => {
-    chart?.resize()
+    scheduleResize()
   })
   resizeObserver.observe(chartElement.value)
 }
@@ -63,7 +105,7 @@ watch(
   () => props.option,
   () => {
     renderChart()
-    chart?.resize()
+    scheduleResize()
   },
   { deep: true }
 )
@@ -76,6 +118,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   disposed = true
+  cancelAnimationFrame(resizeFrameId)
   resizeObserver?.disconnect()
   resizeObserver = null
   chart?.dispose()

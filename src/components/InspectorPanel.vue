@@ -185,6 +185,10 @@ const otherWidgets = computed(() => {
   return props.project.widgets.filter((widget) => widget.id !== props.selectedWidget.id)
 })
 
+const filterTargetWidgets = computed(() =>
+  otherWidgets.value.filter((widget) => widget.type !== 'filterBar')
+)
+
 const availableTargetPages = computed(() =>
   props.pages.filter((item) => item.id !== props.currentPageId)
 )
@@ -313,6 +317,105 @@ const heatmapMatrix = computed({
   }
 })
 
+const chinaMapItems = computed({
+  get: () =>
+    (Array.isArray(props.selectedWidget?.props.items) ? props.selectedWidget.props.items : [])
+      .map((item) => `${String(item?.name ?? '').trim()}|${Number(item?.value ?? 0)}`.trim())
+      .filter(Boolean)
+      .join('\n'),
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    props.selectedWidget.props.items = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        const [name = '', rawValue = '0'] = item.split('|')
+        return {
+          name: name.trim(),
+          value: Number(rawValue.trim() || 0)
+        }
+      })
+      .filter((item) => item.name)
+  }
+})
+
+const chinaMapPoints = computed({
+  get: () =>
+    (Array.isArray(props.selectedWidget?.props.points) ? props.selectedWidget.props.points : [])
+      .map((item) =>
+        [
+          String(item?.name ?? '').trim(),
+          Number(item?.value ?? 0),
+          String(item?.category ?? '').trim(),
+          String(item?.color ?? '').trim(),
+          Number.isFinite(Number(item?.size)) ? String(Number(item.size)) : ''
+        ].join('|')
+      )
+      .filter(Boolean)
+      .join('\n'),
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    props.selectedWidget.props.points = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        const [name = '', rawValue = '0', category = '', color = '', rawSize = ''] = item.split('|')
+        const size = Number(rawSize.trim())
+        return {
+          name: name.trim(),
+          value: Number(rawValue.trim() || 0),
+          category: category.trim(),
+          color: color.trim(),
+          ...(Number.isFinite(size) ? { size } : {})
+        }
+      })
+      .filter((item) => item.name)
+  }
+})
+
+const chinaMapLinks = computed({
+  get: () =>
+    (Array.isArray(props.selectedWidget?.props.links) ? props.selectedWidget.props.links : [])
+      .map((item) =>
+        [
+          String(item?.from ?? '').trim(),
+          String(item?.to ?? '').trim(),
+          Number(item?.value ?? 0),
+          String(item?.color ?? '').trim()
+        ].join('|')
+      )
+      .filter(Boolean)
+      .join('\n'),
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    props.selectedWidget.props.links = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        const [from = '', to = '', rawValue = '0', color = ''] = item.split('|')
+        return {
+          from: from.trim(),
+          to: to.trim(),
+          value: Number(rawValue.trim() || 0),
+          color: color.trim()
+        }
+      })
+      .filter((item) => item.from && item.to)
+  }
+})
+
 const noticeItems = computed({
   get: () =>
     (Array.isArray(props.selectedWidget?.props.items) ? props.selectedWidget.props.items : [])
@@ -362,6 +465,74 @@ const tabItems = computed({
           unit: unit.trim(),
           description: description.trim(),
           meta: meta.trim()
+        }
+      })
+  }
+})
+
+const filterOptions = computed({
+  get: () =>
+    (Array.isArray(props.selectedWidget?.props.options) ? props.selectedWidget.props.options : [])
+      .map((item) =>
+        [
+          String(item?.label ?? '').trim(),
+          String(item?.value ?? '').trim(),
+          Number.isFinite(Number(item?.count)) ? String(Number(item.count)) : ''
+        ].join('|')
+      )
+      .filter(Boolean)
+      .join('\n'),
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    props.selectedWidget.props.options = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item, index) => {
+        const [label = '', optionValue = '', count = ''] = item.split('|')
+        return {
+          label: label.trim() || `选项 ${index + 1}`,
+          value: optionValue.trim() || label.trim() || `${index + 1}`,
+          count: Number(count.trim() || 0)
+        }
+      })
+  }
+})
+
+const timelineItems = computed({
+  get: () =>
+    (Array.isArray(props.selectedWidget?.props.items) ? props.selectedWidget.props.items : [])
+      .map((item) =>
+        [
+          String(item?.time ?? '').trim(),
+          String(item?.title ?? '').trim(),
+          String(item?.description ?? '').trim(),
+          String(item?.tag ?? '').trim(),
+          String(item?.status ?? '').trim()
+        ].join('|')
+      )
+      .filter(Boolean)
+      .join('\n'),
+  set: (value) => {
+    if (!props.selectedWidget) {
+      return
+    }
+
+    props.selectedWidget.props.items = value
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item, index) => {
+        const [time = '', title = '', description = '', tag = '', status = 'pending'] = item.split('|')
+        return {
+          time: time.trim(),
+          title: title.trim() || `节点 ${index + 1}`,
+          description: description.trim(),
+          tag: tag.trim(),
+          status: String(status || 'pending').trim() || 'pending'
         }
       })
   }
@@ -490,8 +661,13 @@ const widgetFields = computed(() =>
     heatmapXLabels,
     heatmapYLabels,
     heatmapMatrix,
+    chinaMapItems,
+    chinaMapPoints,
+    chinaMapLinks,
     noticeItems,
     tabItems,
+    filterOptions,
+    timelineItems,
     rankingNames,
     rankingValues,
     tableColumns,
@@ -719,6 +895,30 @@ function isTargetWidgetSelected(widgetId, action = selectedInteractionAction.val
 
 function isTargetSourceSelected(sourceId, action = selectedInteractionAction.value) {
   return Boolean(action?.targetSourceIds?.includes(sourceId))
+}
+
+function toggleFilterTargetWidget(widgetId) {
+  if (!props.selectedWidget || props.selectedWidget.type !== 'filterBar') {
+    return
+  }
+
+  const selected = new Set(
+    Array.isArray(props.selectedWidget.props.targetWidgetIds)
+      ? props.selectedWidget.props.targetWidgetIds
+      : []
+  )
+
+  if (selected.has(widgetId)) {
+    selected.delete(widgetId)
+  } else {
+    selected.add(widgetId)
+  }
+
+  props.selectedWidget.props.targetWidgetIds = Array.from(selected)
+}
+
+function isFilterTargetWidgetSelected(widgetId) {
+  return Boolean(props.selectedWidget?.props?.targetWidgetIds?.includes(widgetId))
 }
 </script>
 
@@ -1043,6 +1243,27 @@ function isTargetSourceSelected(sourceId, action = selectedInteractionAction.val
         storage-key="panel-widget-schema"
       >
         <SchemaFields :fields="widgetFields" :model="selectedWidget" />
+      </InspectorSection>
+
+      <InspectorSection
+        v-if="selectedWidget.type === 'filterBar'"
+        title="联动目标"
+        caption="选择当前筛选条要作用的组件；如果不选，默认作用于当前页面所有支持筛选的组件。"
+        storage-key="panel-widget-filter-targets"
+      >
+        <div v-if="filterTargetWidgets.length" class="inspector-choice-grid">
+          <button
+            v-for="widget in filterTargetWidgets"
+            :key="widget.id"
+            type="button"
+            class="inspector-choice-button"
+            :class="{ 'is-active': isFilterTargetWidgetSelected(widget.id) }"
+            @click="toggleFilterTargetWidget(widget.id)"
+          >
+            {{ widget.name }}
+          </button>
+        </div>
+        <div v-else class="inspector-empty">当前页面暂无可联动的其他组件。</div>
       </InspectorSection>
     </div>
 

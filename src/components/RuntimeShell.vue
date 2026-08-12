@@ -25,10 +25,14 @@ defineProps({
   dataSourceRuntime: {
     type: Object,
     default: () => ({})
+  },
+  runtimeFilters: {
+    type: Object,
+    default: () => ({})
   }
 })
 
-defineEmits(['select-page', 'exit-runtime', 'copy-runtime-link', 'trigger-widget-action'])
+defineEmits(['select-page', 'exit-runtime', 'copy-runtime-link', 'trigger-widget-action', 'widget-command'])
 </script>
 
 <template>
@@ -66,9 +70,11 @@ defineEmits(['select-page', 'exit-runtime', 'copy-runtime-link', 'trigger-widget
         :preview-mode="true"
         :linked-widget-ids="linkedWidgetIds"
         :data-source-runtime="dataSourceRuntime"
+        :runtime-filters="runtimeFilters"
         :show-meta="false"
         :runtime-mode="true"
         @trigger-widget-action="$emit('trigger-widget-action', $event)"
+        @widget-command="$emit('widget-command', $event)"
       />
     </div>
   </div>
