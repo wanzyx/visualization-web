@@ -7,7 +7,13 @@ const props = defineProps({
         type: Object,
         required: true,
     },
+    previewMode: {
+        type: Boolean,
+        default: false,
+    },
 });
+
+const emit = defineEmits(["widget-command"]);
 
 const xLabels = computed(() => {
     const source = Array.isArray(props.widget.props.xLabels)
@@ -36,14 +42,39 @@ const matrix = computed(() => {
     );
 });
 
+const activeCategory = computed(() =>
+    String(props.widget.props.activeCategory ?? "").trim(),
+);
+
 const flattenedValues = computed(() =>
     matrix.value.flatMap((row, rowIndex) =>
-        row.map((value, columnIndex) => [columnIndex, rowIndex, value]),
+        row.map((value, columnIndex) => {
+            const xLabel = String(xLabels.value[columnIndex] ?? "");
+            const isActive =
+                activeCategory.value && activeCategory.value === xLabel;
+
+            return {
+                value: [columnIndex, rowIndex, value],
+                itemStyle: isActive
+                    ? {
+                          borderColor: "#eff8ff",
+                          borderWidth: 1,
+                          shadowBlur: 14,
+                          shadowColor: "rgba(72, 220, 255, 0.35)",
+                      }
+                    : activeCategory.value
+                      ? { opacity: 0.28 }
+                      : undefined,
+            };
+        }),
     ),
 );
 
 const maxValue = computed(() =>
-    Math.max(0, ...flattenedValues.value.map((item) => Number(item[2] ?? 0))),
+    Math.max(
+        0,
+        ...flattenedValues.value.map((item) => Number(item.value?.[2] ?? 0)),
+    ),
 );
 
 const option = computed(() => ({
@@ -56,7 +87,10 @@ const option = computed(() => ({
             color: "#eff8ff",
         },
         formatter: (params) => {
-            const [columnIndex, rowIndex, value] = params.data;
+            const data = Array.isArray(params.data) ? params.data : params.data?.value;
+            const [columnIndex, rowIndex, value] = Array.isArray(data)
+                ? data
+                : [];
             const columnLabel =
                 xLabels.value[columnIndex] ?? `列 ${columnIndex + 1}`;
             const rowLabel = yLabels.value[rowIndex] ?? `行 ${rowIndex + 1}`;
@@ -148,6 +182,33 @@ const option = computed(() => ({
         },
     ],
 }));
+
+function handleChartClick(params) {
+    if (!props.previewMode || props.widget.props.enableFilterLinkage === false) {
+        return;
+    }
+
+    const raw = Array.isArray(params?.data)
+        ? params.data
+        : Array.isArray(params?.data?.value)
+          ? params.data.value
+          : [];
+    const columnIndex = Number(raw[0]);
+    const nextValue = String(
+        xLabels.value[columnIndex] ?? params?.name ?? "",
+    ).trim();
+
+    if (!nextValue) {
+        return;
+    }
+
+    const cleared = activeCategory.value === nextValue;
+    emit("widget-command", {
+        command: "select-category",
+        value: cleared ? "" : nextValue,
+        label: cleared ? "" : nextValue,
+    });
+}
 </script>
 
 <template>
@@ -157,7 +218,7 @@ const option = computed(() => ({
         </div>
 
         <div class="widget-chart__body">
-            <BaseEChart :option="option" />
+            <BaseEChart :option="option" @chart-click="handleChartClick" />
         </div>
     </div>
 </template>

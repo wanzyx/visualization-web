@@ -396,6 +396,16 @@ export function createWidgetFields({
                     },
                 },
                 { path: "props.color", label: "柱体颜色", type: "text" },
+                {
+                    path: "props.enableFilterLinkage",
+                    label: "点击写入筛选",
+                    type: "checkbox",
+                },
+                {
+                    path: "props.filterField",
+                    label: "联动筛选字段",
+                    type: "text",
+                },
             ];
 
         case "pieChart":
@@ -426,6 +436,16 @@ export function createWidgetFields({
                     label: "颜色数组 JSON",
                     type: "textarea",
                     rows: 3,
+                },
+                {
+                    path: "props.enableFilterLinkage",
+                    label: "点击写入筛选",
+                    type: "checkbox",
+                },
+                {
+                    path: "props.filterField",
+                    label: "联动筛选字段",
+                    type: "text",
                 },
             ];
 
@@ -463,6 +483,16 @@ export function createWidgetFields({
                     label: "面积颜色",
                     type: "text",
                     span: "half",
+                },
+                {
+                    path: "props.enableFilterLinkage",
+                    label: "点击写入筛选",
+                    type: "checkbox",
+                },
+                {
+                    path: "props.filterField",
+                    label: "联动筛选字段",
+                    type: "text",
                 },
             ];
 
@@ -516,6 +546,16 @@ export function createWidgetFields({
                     label: "显示数值",
                     type: "checkbox",
                 },
+                {
+                    path: "props.enableFilterLinkage",
+                    label: "点击写入筛选",
+                    type: "checkbox",
+                },
+                {
+                    path: "props.filterField",
+                    label: "联动筛选字段",
+                    type: "text",
+                },
             ];
 
         case "chinaRegionMap":
@@ -540,8 +580,18 @@ export function createWidgetFields({
                 },
                 {
                     path: "props.enableDrilldown",
-                    label: "\u542f\u7528\u70b9\u51fb\u4e0b\u94bb",
+                    label: "启用点击下钻",
                     type: "checkbox",
+                },
+                {
+                    path: "props.enableFilterLinkage",
+                    label: "下钻写入筛选",
+                    type: "checkbox",
+                },
+                {
+                    path: "props.filterField",
+                    label: "联动筛选字段",
+                    type: "text",
                 },
                 {
                     key: "china-map-items",

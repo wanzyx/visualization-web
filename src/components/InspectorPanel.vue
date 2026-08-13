@@ -17,6 +17,10 @@ import {
     createInteractionAction,
     getInteractionActions,
 } from "../editor/project";
+import {
+    isFilterableWidgetType,
+    isFilterSourceWidgetType,
+} from "../editor/runtimeFilters";
 
 const props = defineProps({
     page: {
@@ -198,7 +202,11 @@ const otherWidgets = computed(() => {
 });
 
 const filterTargetWidgets = computed(() =>
-    otherWidgets.value.filter((widget) => widget.type !== "filterBar"),
+    otherWidgets.value.filter((widget) => isFilterableWidgetType(widget.type)),
+);
+
+const showFilterTargetSection = computed(() =>
+    isFilterSourceWidgetType(props.selectedWidget?.type),
 );
 
 const availableTargetPages = computed(() =>
@@ -1038,7 +1046,10 @@ function isTargetSourceSelected(
 }
 
 function toggleFilterTargetWidget(widgetId) {
-    if (!props.selectedWidget || props.selectedWidget.type !== "filterBar") {
+    if (
+        !props.selectedWidget ||
+        !isFilterSourceWidgetType(props.selectedWidget.type)
+    ) {
         return;
     }
 
@@ -1558,9 +1569,9 @@ function isFilterTargetWidgetSelected(widgetId) {
             </InspectorSection>
 
             <InspectorSection
-                v-if="selectedWidget.type === 'filterBar'"
+                v-if="showFilterTargetSection"
                 title="联动目标"
-                caption="选择当前筛选条要作用的组件；如果不选，默认作用于当前页面所有支持筛选的组件。"
+                caption="选择当前筛选来源要作用的组件。不选时默认作用于排行/表格/时间轴/地图；图表不会被默认命中，需显式勾选。"
                 storage-key="panel-widget-filter-targets"
             >
                 <div

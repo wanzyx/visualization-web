@@ -457,7 +457,11 @@ const option = computed(() => {
 });
 
 function handleChartClick(params) {
-    if (props.widget.props.enableDrilldown === false || !params) {
+    if (
+        !props.previewMode ||
+        props.widget.props.enableDrilldown === false ||
+        !params
+    ) {
         return;
     }
 

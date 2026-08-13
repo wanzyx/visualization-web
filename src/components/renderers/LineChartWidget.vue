@@ -7,7 +7,13 @@ const props = defineProps({
         type: Object,
         required: true,
     },
+    previewMode: {
+        type: Boolean,
+        default: false,
+    },
 });
+
+const emit = defineEmits(["widget-command"]);
 
 const labels = computed(() => {
     const source = Array.isArray(props.widget.props.labels)
@@ -24,6 +30,10 @@ const values = computed(() => {
 
     return labels.value.map((_, index) => Number(source[index] ?? 0));
 });
+
+const activeCategory = computed(() =>
+    String(props.widget.props.activeCategory ?? "").trim(),
+);
 
 const option = computed(() => ({
     animationDuration: 650,
@@ -81,7 +91,25 @@ const option = computed(() => ({
     series: [
         {
             type: "line",
-            data: values.value,
+            data: values.value.map((value, index) => {
+                const category = String(labels.value[index] ?? "");
+                const isActive =
+                    activeCategory.value && activeCategory.value === category;
+
+                return {
+                    value,
+                    symbolSize: isActive ? 12 : 8,
+                    itemStyle: isActive
+                        ? {
+                              opacity: 1,
+                              shadowBlur: 16,
+                              shadowColor: "rgba(72, 220, 255, 0.35)",
+                          }
+                        : activeCategory.value
+                          ? { opacity: 0.35 }
+                          : undefined,
+                };
+            }),
             smooth: true,
             showSymbol: true,
             symbol: "circle",
@@ -101,6 +129,25 @@ const option = computed(() => ({
         },
     ],
 }));
+
+function handleChartClick(params) {
+    if (!props.previewMode || props.widget.props.enableFilterLinkage === false) {
+        return;
+    }
+
+    const nextValue = String(params?.name ?? "").trim();
+
+    if (!nextValue) {
+        return;
+    }
+
+    const cleared = activeCategory.value === nextValue;
+    emit("widget-command", {
+        command: "select-category",
+        value: cleared ? "" : nextValue,
+        label: cleared ? "" : nextValue,
+    });
+}
 </script>
 
 <template>
@@ -110,7 +157,7 @@ const option = computed(() => ({
         </div>
 
         <div class="widget-chart__body">
-            <BaseEChart :option="option" />
+            <BaseEChart :option="option" @chart-click="handleChartClick" />
         </div>
     </div>
 </template>

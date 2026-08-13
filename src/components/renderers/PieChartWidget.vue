@@ -7,7 +7,13 @@ const props = defineProps({
         type: Object,
         required: true,
     },
+    previewMode: {
+        type: Boolean,
+        default: false,
+    },
 });
+
+const emit = defineEmits(["widget-command"]);
 
 const categories = computed(() => {
     const source = Array.isArray(props.widget.props.categories)
@@ -32,26 +38,46 @@ const colors = computed(() => {
         : ["#46eeff", "#7bfecb", "#ffd66b", "#6d8bff"];
 });
 
+const activeCategory = computed(() =>
+    String(props.widget.props.activeCategory ?? "").trim(),
+);
+
 const seriesData = computed(() => {
     const items = Array.isArray(props.widget.props.items)
         ? props.widget.props.items
         : [];
 
-    if (items.length) {
-        return items
-            .map((item, index) => ({
-                name: String(
-                    item?.name ?? item?.label ?? `项目 ${index + 1}`,
-                ).trim(),
-                value: Number(item?.value ?? 0),
-            }))
-            .filter((item) => item.name);
-    }
+    const base = items.length
+        ? items
+              .map((item, index) => ({
+                  name: String(
+                      item?.name ?? item?.label ?? `项目 ${index + 1}`,
+                  ).trim(),
+                  value: Number(item?.value ?? 0),
+              }))
+              .filter((item) => item.name)
+        : categories.value.map((name, index) => ({
+              name,
+              value: values.value[index] ?? 0,
+          }));
 
-    return categories.value.map((name, index) => ({
-        name,
-        value: values.value[index] ?? 0,
-    }));
+    return base.map((item) => {
+        const isActive =
+            activeCategory.value && activeCategory.value === item.name;
+
+        return {
+            ...item,
+            itemStyle: isActive
+                ? {
+                      opacity: 1,
+                      shadowBlur: 18,
+                      shadowColor: "rgba(72, 220, 255, 0.35)",
+                  }
+                : activeCategory.value
+                  ? { opacity: 0.28 }
+                  : undefined,
+        };
+    });
 });
 
 const hasData = computed(() =>
@@ -112,6 +138,25 @@ const option = computed(() => ({
         },
     ],
 }));
+
+function handleChartClick(params) {
+    if (!props.previewMode || props.widget.props.enableFilterLinkage === false) {
+        return;
+    }
+
+    const nextValue = String(params?.name ?? "").trim();
+
+    if (!nextValue) {
+        return;
+    }
+
+    const cleared = activeCategory.value === nextValue;
+    emit("widget-command", {
+        command: "select-category",
+        value: cleared ? "" : nextValue,
+        label: cleared ? "" : nextValue,
+    });
+}
 </script>
 
 <template>
@@ -121,7 +166,11 @@ const option = computed(() => ({
         </div>
 
         <div class="widget-chart__body">
-            <BaseEChart v-if="hasData" :option="option" />
+            <BaseEChart
+                v-if="hasData"
+                :option="option"
+                @chart-click="handleChartClick"
+            />
             <div v-else class="widget-chart__empty">暂无饼图数据</div>
         </div>
     </div>

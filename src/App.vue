@@ -19,6 +19,10 @@ import {
     resolveDataSourceRuntime,
 } from "./editor/dataSources";
 import {
+    isFilterSourceWidgetType,
+    resolveFilterField,
+} from "./editor/runtimeFilters";
+import {
     STORAGE_KEY,
     TEMPLATE_STORAGE_KEY,
     createDemoProject,
@@ -357,11 +361,10 @@ function setRuntimeWidgetPropsPatch(widgetId, propsPatch = {}) {
 }
 
 function applyRuntimeFilterWidget(widget, value, label = "") {
-    if (!widget || widget.type !== "filterBar") {
+    if (!widget || !isFilterSourceWidgetType(widget.type)) {
         return;
     }
 
-    const field = String(widget.props?.field ?? "").trim();
     const nextValue = String(value ?? "").trim();
     const targetWidgetIds = Array.isArray(widget.props?.targetWidgetIds)
         ? widget.props.targetWidgetIds.filter(
@@ -369,9 +372,31 @@ function applyRuntimeFilterWidget(widget, value, label = "") {
           )
         : [];
 
-    setRuntimeWidgetPropsPatch(widget.id, {
-        activeValue: nextValue,
-    });
+    if (widget.type === "filterBar") {
+        setRuntimeWidgetPropsPatch(widget.id, {
+            activeValue: nextValue,
+        });
+    } else if (widget.type === "chinaRegionMap") {
+        setRuntimeWidgetPropsPatch(widget.id, {
+            activeProvince: nextValue,
+        });
+    } else {
+        setRuntimeWidgetPropsPatch(widget.id, {
+            activeCategory: nextValue,
+        });
+    }
+
+    if (
+        widget.type !== "filterBar" &&
+        widget.props?.enableFilterLinkage === false
+    ) {
+        const nextFilters = { ...runtimeFilters.value };
+        delete nextFilters[widget.id];
+        runtimeFilters.value = nextFilters;
+        return;
+    }
+
+    const field = resolveFilterField(widget);
 
     if (!field || !nextValue) {
         const nextFilters = { ...runtimeFilters.value };
@@ -404,22 +429,49 @@ function syncPageRuntimeFilters(pageId = currentPageId.value) {
     }
 
     page.widgets
-        .filter((widget) => widget.type === "filterBar")
+        .filter((widget) => isFilterSourceWidgetType(widget.type))
         .forEach((widget) => {
             const runtimeWidget = buildRuntimeWidgetView(widget) ?? widget;
-            const activeValue = String(
-                runtimeWidget.props?.activeValue ?? "",
-            ).trim();
-            const option = (
-                Array.isArray(runtimeWidget.props?.options)
-                    ? runtimeWidget.props.options
-                    : []
-            ).find((item) => String(item?.value ?? "").trim() === activeValue);
 
+            if (runtimeWidget.type === "filterBar") {
+                const activeValue = String(
+                    runtimeWidget.props?.activeValue ?? "",
+                ).trim();
+                const option = (
+                    Array.isArray(runtimeWidget.props?.options)
+                        ? runtimeWidget.props.options
+                        : []
+                ).find(
+                    (item) => String(item?.value ?? "").trim() === activeValue,
+                );
+
+                applyRuntimeFilterWidget(
+                    runtimeWidget,
+                    activeValue,
+                    String(option?.label ?? "").trim(),
+                );
+                return;
+            }
+
+            if (runtimeWidget.type === "chinaRegionMap") {
+                const activeProvince = String(
+                    runtimeWidget.props?.activeProvince ?? "",
+                ).trim();
+                applyRuntimeFilterWidget(
+                    runtimeWidget,
+                    activeProvince,
+                    activeProvince,
+                );
+                return;
+            }
+
+            const activeCategory = String(
+                runtimeWidget.props?.activeCategory ?? "",
+            ).trim();
             applyRuntimeFilterWidget(
                 runtimeWidget,
-                activeValue,
-                String(option?.label ?? "").trim(),
+                activeCategory,
+                activeCategory,
             );
         });
 }
@@ -3244,14 +3296,28 @@ function handleWidgetCommand(payload = {}) {
         runtimeWidget.type === "chinaRegionMap"
     ) {
         const nextValue = String(payload.value ?? "").trim();
+        const nextLabel = String(payload.label ?? nextValue).trim();
 
-        setRuntimeWidgetPropsPatch(runtimeWidget.id, {
-            activeProvince: nextValue,
-        });
-
+        applyRuntimeFilterWidget(runtimeWidget, nextValue, nextLabel);
         statusMessage.value = nextValue
             ? `Map focus: ${runtimeWidget.props?.title || runtimeWidget.name} / ${nextValue}`
             : `Map focus cleared: ${runtimeWidget.props?.title || runtimeWidget.name}`;
+        return;
+    }
+
+    if (
+        payload.command === "select-category" &&
+        ["barChart", "lineChart", "pieChart", "heatmapChart"].includes(
+            runtimeWidget.type,
+        )
+    ) {
+        const nextValue = String(payload.value ?? "").trim();
+        const nextLabel = String(payload.label ?? nextValue).trim();
+
+        applyRuntimeFilterWidget(runtimeWidget, nextValue, nextLabel);
+        statusMessage.value = nextValue
+            ? `Chart filter: ${runtimeWidget.props?.title || runtimeWidget.name} / ${nextLabel || nextValue}`
+            : `Chart filter cleared: ${runtimeWidget.props?.title || runtimeWidget.name}`;
     }
 }
 

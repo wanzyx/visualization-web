@@ -92,6 +92,10 @@ const library = {
             categories: ["App", "小程序", "官网", "门店", "其他"],
             values: [92, 76, 54, 39, 22],
             color: "#46eeff",
+            enableFilterLinkage: false,
+            filterField: "name",
+            activeCategory: "",
+            targetWidgetIds: [],
         },
     },
     lineChart: {
@@ -109,6 +113,10 @@ const library = {
             values: [14, 28, 19, 33, 48, 30, 22],
             color: "#7bfecb",
             areaColor: "rgba(123, 254, 203, 0.18)",
+            enableFilterLinkage: false,
+            filterField: "name",
+            activeCategory: "",
+            targetWidgetIds: [],
         },
     },
     heatmapChart: {
@@ -133,6 +141,10 @@ const library = {
             lowColor: "rgba(70, 238, 255, 0.08)",
             highColor: "#46eeff",
             showValues: true,
+            enableFilterLinkage: false,
+            filterField: "name",
+            activeCategory: "",
+            targetWidgetIds: [],
         },
     },
     chinaRegionMap: {
@@ -153,6 +165,9 @@ const library = {
             accent: "#7bfecb",
             showLegend: true,
             enableDrilldown: true,
+            enableFilterLinkage: true,
+            filterField: "name",
+            targetWidgetIds: [],
             showScatter: true,
             showFlightLines: true,
             activeProvince: "",
@@ -234,6 +249,10 @@ const library = {
             categories: ["零售", "服务", "供应链", "其他"],
             values: [38, 26, 21, 15],
             colors: ["#46eeff", "#7bfecb", "#ffd66b", "#6d8bff"],
+            enableFilterLinkage: false,
+            filterField: "name",
+            activeCategory: "",
+            targetWidgetIds: [],
         },
     },
     rankingList: {
@@ -417,7 +436,7 @@ const library = {
         type: "filterBar",
         label: "联动筛选条",
         description:
-            "适合大屏顶部条件切换，可联动过滤排行、表格、区域分布和时间轴",
+            "适合大屏顶部条件切换，可联动过滤排行、表格、图表、区域分布和时间轴",
         icon: "FLT",
         size: { w: 620, h: 104 },
         style: {

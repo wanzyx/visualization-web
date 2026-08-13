@@ -172,6 +172,7 @@ const displayWidget = computed(() => {
         const runtimeFilters = getWidgetRuntimeFilters(
             props.widget.id,
             props.runtimeFilters,
+            props.widget.type,
         );
         return {
             ...props.widget,
@@ -185,6 +186,7 @@ const displayWidget = computed(() => {
         const runtimeFilters = getWidgetRuntimeFilters(
             props.widget.id,
             props.runtimeFilters,
+            props.widget.type,
         );
         return {
             ...props.widget,
@@ -204,6 +206,22 @@ const displayWidget = computed(() => {
         mergedProps.activeValue = props.widget.props.activeValue;
     }
 
+    if (
+        props.widget.type === "chinaRegionMap" &&
+        Object.hasOwn(props.widget.props, "activeProvince")
+    ) {
+        mergedProps.activeProvince = props.widget.props.activeProvince;
+    }
+
+    if (
+        ["barChart", "lineChart", "pieChart", "heatmapChart"].includes(
+            props.widget.type,
+        ) &&
+        Object.hasOwn(props.widget.props, "activeCategory")
+    ) {
+        mergedProps.activeCategory = props.widget.props.activeCategory;
+    }
+
     const mergedWidget = {
         ...props.widget,
         props: mergedProps,
@@ -211,6 +229,7 @@ const displayWidget = computed(() => {
     const runtimeFilters = getWidgetRuntimeFilters(
         props.widget.id,
         props.runtimeFilters,
+        props.widget.type,
     );
 
     return {
@@ -219,7 +238,20 @@ const displayWidget = computed(() => {
     };
 });
 
+let suppressClickInteraction = false;
+
 function handleWidgetCommand(command) {
+    if (
+        command?.command === "select-category" ||
+        command?.command === "select-region"
+    ) {
+        // 图表/地图点选优先走筛选，避免同一次点击再触发外框 click 交互
+        suppressClickInteraction = true;
+        queueMicrotask(() => {
+            suppressClickInteraction = false;
+        });
+    }
+
     emit("widget-command", {
         widgetId: props.widget.id,
         ...(command ?? {}),
@@ -282,6 +314,11 @@ function handleFramePointerDown(event) {
 }
 
 function handleFrameClick(event) {
+    if (suppressClickInteraction) {
+        suppressClickInteraction = false;
+        return;
+    }
+
     if (
         !props.previewMode ||
         !interactionActions.value.length ||
