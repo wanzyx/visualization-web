@@ -78,6 +78,13 @@ const transformOverlay = ref(null)
 let resizeObserver = null
 let interactionState = null
 let marqueeState = null
+let pointerMoveFrameId = 0
+let queuedPointerMoveEvent = null
+let marqueeMoveFrameId = 0
+let queuedMarqueeMoveEvent = null
+let guideMoveFrameId = 0
+let queuedGuideMoveEvent = null
+let scaleFrameId = 0
 
 const orderedWidgets = computed(() =>
   [...props.project.widgets]
@@ -278,6 +285,24 @@ function updateScale() {
   const horizontal = (bounds.width - reservedWidth) / props.project.meta.screenWidth
   const vertical = (bounds.height - reservedHeight) / props.project.meta.screenHeight
   fitScale.value = Math.max(MIN_SCALE, Math.min(horizontal, vertical, 1))
+}
+
+function getPointerSample(event) {
+  return {
+    clientX: event.clientX,
+    clientY: event.clientY
+  }
+}
+
+function scheduleScaleUpdate() {
+  if (scaleFrameId) {
+    return
+  }
+
+  scaleFrameId = requestAnimationFrame(() => {
+    scaleFrameId = 0
+    updateScale()
+  })
 }
 
 function clamp(value, min, max) {
@@ -713,7 +738,8 @@ function beginInteraction(payload, mode) {
       y: item.y,
       w: item.w,
       h: item.h
-    }))
+    })),
+    snapTargets: buildSnapTargets(mode === 'move' ? activeIds : [payload.widgetId])
   }
   updateTransformOverlay(mode, referenceBounds)
 
@@ -806,8 +832,8 @@ function findNearestValueSnap(value, targets) {
   return best
 }
 
-function applyMoveSnap(nextLeft, nextTop, bounds, activeIds) {
-  const { xTargets, yTargets } = buildSnapTargets(activeIds)
+function applyMoveSnap(nextLeft, nextTop, bounds, snapTargets) {
+  const { xTargets, yTargets } = snapTargets
   const snapX = findNearestSnap(
     [
       { value: nextLeft, offset: 0 },
@@ -836,8 +862,8 @@ function applyMoveSnap(nextLeft, nextTop, bounds, activeIds) {
   }
 }
 
-function applyResizeSnap(nextRight, nextBottom, widgetId) {
-  const { xTargets, yTargets } = buildSnapTargets([widgetId])
+function applyResizeSnap(nextRight, nextBottom, snapTargets) {
+  const { xTargets, yTargets } = snapTargets
   const snapX = findNearestValueSnap(nextRight, xTargets)
   const snapY = findNearestValueSnap(nextBottom, yTargets)
 
@@ -852,7 +878,7 @@ function applyResizeSnap(nextRight, nextBottom, widgetId) {
   }
 }
 
-function handlePointerMove(event) {
+function processPointerMove(event) {
   if (!interactionState) {
     return
   }
@@ -869,7 +895,7 @@ function handlePointerMove(event) {
       nextLeft,
       nextTop,
       interactionState.referenceBounds,
-      interactionState.activeIds
+      interactionState.snapTargets
     )
 
     const moveX = snapped.left - interactionState.referenceBounds.x
@@ -912,7 +938,7 @@ function handlePointerMove(event) {
       origin.y + 80,
       props.project.meta.screenHeight
     )
-    const snapped = applyResizeSnap(nextRight, nextBottom, widget.id)
+    const snapped = applyResizeSnap(nextRight, nextBottom, interactionState.snapTargets)
 
     widget.w = clamp(snapped.right - origin.x, 120, props.project.meta.screenWidth - origin.x)
     widget.h = clamp(snapped.bottom - origin.y, 80, props.project.meta.screenHeight - origin.y)
@@ -925,12 +951,39 @@ function handlePointerMove(event) {
   }
 }
 
+function flushPointerMove() {
+  if (!queuedPointerMoveEvent) {
+    return
+  }
+
+  const event = queuedPointerMoveEvent
+  queuedPointerMoveEvent = null
+  processPointerMove(event)
+}
+
+function handlePointerMove(event) {
+  queuedPointerMoveEvent = getPointerSample(event)
+
+  if (pointerMoveFrameId) {
+    return
+  }
+
+  pointerMoveFrameId = requestAnimationFrame(() => {
+    pointerMoveFrameId = 0
+    flushPointerMove()
+  })
+}
+
 function stopInteraction() {
   if (!interactionState) {
     return
   }
 
+  cancelAnimationFrame(pointerMoveFrameId)
+  pointerMoveFrameId = 0
+  flushPointerMove()
   interactionState = null
+  queuedPointerMoveEvent = null
   guideLines.value = {
     vertical: null,
     horizontal: null
@@ -981,7 +1034,7 @@ function handleStagePointerDown(event) {
   window.addEventListener('pointerup', finishMarqueeSelection)
 }
 
-function handleMarqueeMove(event) {
+function processMarqueeMove(event) {
   if (!marqueeState) {
     return
   }
@@ -997,11 +1050,37 @@ function handleMarqueeMove(event) {
   )
 }
 
+function flushMarqueeMove() {
+  if (!queuedMarqueeMoveEvent) {
+    return
+  }
+
+  const event = queuedMarqueeMoveEvent
+  queuedMarqueeMoveEvent = null
+  processMarqueeMove(event)
+}
+
+function handleMarqueeMove(event) {
+  queuedMarqueeMoveEvent = getPointerSample(event)
+
+  if (marqueeMoveFrameId) {
+    return
+  }
+
+  marqueeMoveFrameId = requestAnimationFrame(() => {
+    marqueeMoveFrameId = 0
+    flushMarqueeMove()
+  })
+}
+
 function finishMarqueeSelection() {
   if (!marqueeState) {
     return
   }
 
+  cancelAnimationFrame(marqueeMoveFrameId)
+  marqueeMoveFrameId = 0
+  flushMarqueeMove()
   const rect = marqueeRect.value
 
   if (!rect || (rect.w < 4 && rect.h < 4)) {
@@ -1026,6 +1105,7 @@ function finishMarqueeSelection() {
 
   marqueeState = null
   marqueeRect.value = null
+  queuedMarqueeMoveEvent = null
   clearMarqueeListeners()
 }
 
@@ -1118,7 +1198,7 @@ function startGuideDrag(orientation, index, event) {
   window.addEventListener('pointerup', finishGuideDrag)
 }
 
-function handleGuideMove(event) {
+function processGuideMove(event) {
   if (!guideDragState.value) {
     return
   }
@@ -1136,11 +1216,37 @@ function handleGuideMove(event) {
   }
 }
 
+function flushGuideMove() {
+  if (!queuedGuideMoveEvent) {
+    return
+  }
+
+  const event = queuedGuideMoveEvent
+  queuedGuideMoveEvent = null
+  processGuideMove(event)
+}
+
+function handleGuideMove(event) {
+  queuedGuideMoveEvent = getPointerSample(event)
+
+  if (guideMoveFrameId) {
+    return
+  }
+
+  guideMoveFrameId = requestAnimationFrame(() => {
+    guideMoveFrameId = 0
+    flushGuideMove()
+  })
+}
+
 function finishGuideDrag() {
   if (!guideDragState.value) {
     return
   }
 
+  cancelAnimationFrame(guideMoveFrameId)
+  guideMoveFrameId = 0
+  flushGuideMove()
   const state = guideDragState.value
   const draft = guideDraft.value
 
@@ -1163,6 +1269,7 @@ function finishGuideDrag() {
 
   guideDragState.value = null
   guideDraft.value = null
+  queuedGuideMoveEvent = null
   emit('history-session-end')
   clearGuideListeners()
 }
@@ -1218,16 +1325,21 @@ function handleCanvasWheel(event) {
 onMounted(() => {
   syncGuideCollections()
   updateScale()
-  resizeObserver = new ResizeObserver(() => updateScale())
+  resizeObserver = new ResizeObserver(() => scheduleScaleUpdate())
   resizeObserver.observe(containerRef.value)
 })
 
 onBeforeUnmount(() => {
   stopInteraction()
+  cancelAnimationFrame(scaleFrameId)
+  cancelAnimationFrame(marqueeMoveFrameId)
+  cancelAnimationFrame(guideMoveFrameId)
   marqueeState = null
   marqueeRect.value = null
+  queuedMarqueeMoveEvent = null
   guideDraft.value = null
   guideDragState.value = null
+  queuedGuideMoveEvent = null
   clearMarqueeListeners()
   clearGuideListeners()
   resizeObserver?.disconnect()
@@ -1237,7 +1349,7 @@ watch(
   () => [props.project.meta.screenWidth, props.project.meta.screenHeight, showRulers.value],
   () => {
     syncGuideCollections()
-    updateScale()
+    scheduleScaleUpdate()
   }
 )
 </script>
