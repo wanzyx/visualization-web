@@ -24,6 +24,9 @@ const createInteractionActionId = () =>
 const createInteractionConditionRuleId = () =>
     globalThis.crypto?.randomUUID?.() ??
     `condition-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const createRuntimeVariablePresetId = () =>
+    globalThis.crypto?.randomUUID?.() ??
+    `runtime-variable-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const interactionTriggers = [
     "click",
     "double-click",
@@ -127,6 +130,17 @@ function normalizePageMeta(meta) {
 function normalizeDataBinding(binding) {
     return {
         sourceId: typeof binding?.sourceId === "string" ? binding.sourceId : "",
+    };
+}
+
+function normalizeRuntimeVariablePreset(preset) {
+    return {
+        id:
+            typeof preset?.id === "string" && preset.id
+                ? preset.id
+                : createRuntimeVariablePresetId(),
+        key: typeof preset?.key === "string" ? preset.key.trim() : "",
+        value: preset?.value == null ? "" : String(preset.value),
     };
 }
 
@@ -255,6 +269,10 @@ export function createInteractionAction(action = "none", overrides = {}) {
 
 export function createInteractionConditionRule(overrides = {}) {
     return normalizeInteractionConditionRule(overrides);
+}
+
+export function createRuntimeVariablePreset(overrides = {}) {
+    return normalizeRuntimeVariablePreset(overrides);
 }
 
 export function getInteractionActions(interaction) {
@@ -673,6 +691,7 @@ export function createDemoProject() {
             barSource,
             lineSource,
         ],
+        runtimeVariablePresets: [],
         pages: [pageOne, pageTwo],
         activePageId: pageOne.id,
     };
@@ -714,9 +733,17 @@ export function normalizeProjectSchema(rawProject) {
     const hasActivePage = safePages.some(
         (page) => page.id === rawProject.activePageId,
     );
+    const runtimeVariablePresets = Array.isArray(
+        rawProject.runtimeVariablePresets,
+    )
+        ? rawProject.runtimeVariablePresets.map((preset) =>
+              normalizeRuntimeVariablePreset(preset),
+          )
+        : [];
 
     return {
         dataSources,
+        runtimeVariablePresets,
         pages: safePages,
         activePageId: hasActivePage ? rawProject.activePageId : safePages[0].id,
     };

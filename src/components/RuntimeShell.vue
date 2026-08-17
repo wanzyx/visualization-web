@@ -63,6 +63,8 @@ defineEmits([
     "copy-runtime-link",
     "copy-debug-snapshot",
     "clear-debug-events",
+    "reset-runtime-variables",
+    "clear-runtime-variables",
     "trigger-widget-action",
     "widget-command",
 ]);
@@ -304,8 +306,33 @@ function formatSourceTime(timestamp) {
 
                         <section class="runtime-debug__section">
                             <div class="runtime-debug__section-head">
-                                <span>运行时变量</span>
-                                <strong>{{ debugVariables.length }}</strong>
+                                <div class="runtime-debug__section-title">
+                                    <span>运行时变量</span>
+                                    <strong>{{
+                                        debugVariables.length
+                                    }}</strong>
+                                </div>
+
+                                <div class="runtime-debug__section-actions">
+                                    <button
+                                        class="ghost"
+                                        type="button"
+                                        @click="
+                                            $emit('reset-runtime-variables')
+                                        "
+                                    >
+                                        重置变量
+                                    </button>
+                                    <button
+                                        class="ghost"
+                                        type="button"
+                                        @click="
+                                            $emit('clear-runtime-variables')
+                                        "
+                                    >
+                                        清空变量
+                                    </button>
+                                </div>
                             </div>
 
                             <div

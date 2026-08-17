@@ -16,6 +16,7 @@ import {
 import {
     createInteractionAction,
     createInteractionConditionRule,
+    createRuntimeVariablePreset,
     getInteractionActions,
 } from "../editor/project";
 import {
@@ -868,6 +869,11 @@ const interactionActions = computed(
 const selectedInteractionAction = computed(
     () => interactionActions.value[activeInteractionIndex.value] ?? null,
 );
+const runtimeVariablePresets = computed(() =>
+    Array.isArray(props.project.runtimeVariablePresets)
+        ? props.project.runtimeVariablePresets
+        : [],
+);
 const interactionFlowHint = computed(() => {
     switch (props.selectedWidget?.interaction?.trigger) {
         case "double-click":
@@ -1516,6 +1522,52 @@ function isFilterTargetWidgetSelected(widgetId) {
     return Boolean(
         props.selectedWidget?.props?.targetWidgetIds?.includes(widgetId),
     );
+}
+
+function addRuntimeVariablePreset() {
+    if (!Array.isArray(props.project.runtimeVariablePresets)) {
+        props.project.runtimeVariablePresets = [];
+    }
+
+    props.project.runtimeVariablePresets.push(createRuntimeVariablePreset());
+}
+
+function removeRuntimeVariablePreset(index) {
+    if (!Array.isArray(props.project.runtimeVariablePresets)) {
+        return;
+    }
+
+    props.project.runtimeVariablePresets.splice(index, 1);
+}
+
+function isRuntimeVariablePresetKeyDuplicated(index) {
+    const preset = runtimeVariablePresets.value[index];
+    const key = String(preset?.key ?? "").trim();
+
+    if (!key) {
+        return false;
+    }
+
+    return (
+        runtimeVariablePresets.value.filter(
+            (item) => String(item?.key ?? "").trim() === key,
+        ).length > 1
+    );
+}
+
+function getRuntimeVariablePresetSummary(preset, index) {
+    const key = String(preset?.key ?? "").trim();
+
+    if (!key) {
+        return `变量 ${index + 1}：请填写变量名`;
+    }
+
+    if (isRuntimeVariablePresetKeyDuplicated(index)) {
+        return `变量 ${key} 重复，运行时会以后面的配置为准`;
+    }
+
+    const value = String(preset?.value ?? "").trim();
+    return value ? `${key} = ${value}` : `${key} = ""`;
 }
 </script>
 
@@ -2306,6 +2358,89 @@ function isFilterTargetWidgetSelected(widgetId) {
                 <p class="inspector-tip">
                     开启标尺后可从顶部或左侧拖出参考线，拖出画布即可删除。
                 </p>
+            </InspectorSection>
+
+            <InspectorSection
+                title="运行时变量"
+                caption="项目级变量预设会在进入预览或运行页时自动载入，可通过模板直接引用。"
+                storage-key="panel-runtime-variables"
+            >
+                <template #actions>
+                    <button
+                        class="ghost inspector-inline-button"
+                        type="button"
+                        @click="addRuntimeVariablePreset"
+                    >
+                        新增变量
+                    </button>
+                </template>
+
+                <p class="inspector-tip">
+                    支持字符串、数字、布尔值、<code>null</code>、JSON
+                    对象和数组。模板中可通过
+                    <code v-pre>{{ runtime.region }}</code>、
+                    <code v-pre>{{ runtime.panel.title }}</code>
+                    这类路径读取。
+                </p>
+
+                <div
+                    v-if="runtimeVariablePresets.length"
+                    class="runtime-variable-list"
+                >
+                    <article
+                        v-for="(preset, index) in runtimeVariablePresets"
+                        :key="preset.id || index"
+                        class="runtime-variable-card"
+                    >
+                        <div class="runtime-variable-card__head">
+                            <strong>变量 {{ index + 1 }}</strong>
+                            <button
+                                class="ghost danger inspector-inline-button"
+                                type="button"
+                                @click="removeRuntimeVariablePreset(index)"
+                            >
+                                删除
+                            </button>
+                        </div>
+
+                        <div class="inspector-grid">
+                            <label>
+                                <span>变量名</span>
+                                <input
+                                    v-model.trim="preset.key"
+                                    type="text"
+                                    placeholder="例如 region 或 panel.title"
+                                />
+                            </label>
+                        </div>
+
+                        <label>
+                            <span>默认值</span>
+                            <textarea
+                                v-model="preset.value"
+                                class="runtime-variable-card__textarea"
+                                rows="4"
+                                placeholder='例如 全国、128、true、{"city":"杭州"}'
+                            />
+                        </label>
+
+                        <p
+                            class="inspector-tip runtime-variable-card__meta"
+                            :class="{
+                                'is-warning':
+                                    isRuntimeVariablePresetKeyDuplicated(index),
+                            }"
+                        >
+                            {{ getRuntimeVariablePresetSummary(preset, index) }}
+                        </p>
+                    </article>
+                </div>
+
+                <div v-else class="inspector-empty">
+                    当前项目还没有运行时变量预设，可先新增一个变量，再在组件文案或交互动作里通过
+                    <code v-pre>{{ runtime.xxx }}</code>
+                    引用。
+                </div>
             </InspectorSection>
         </div>
 

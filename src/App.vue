@@ -106,7 +106,9 @@ const activeProjectRecordId = ref(initialProjectState.activeProjectId);
 const templates = ref(loadTemplateLibrary());
 const dataSourceRuntime = ref({});
 const widgetRuntimeState = ref({});
-const runtimeVariables = ref({});
+const runtimeVariables = ref(
+    buildRuntimeVariablePresetState(initialProjectState.project),
+);
 const runtimeFilters = ref({});
 const runtimeDebugEvents = ref([]);
 const linkedWidgetIds = ref([]);
@@ -182,6 +184,7 @@ const currentCanvas = computed(() => ({
     meta: currentPage.value?.meta ?? defaultPageMeta,
     widgets: currentWidgets.value,
     dataSources: project.value.dataSources ?? [],
+    runtimeVariablePresets: project.value.runtimeVariablePresets ?? [],
 }));
 
 const selectedIds = ref(
@@ -472,12 +475,32 @@ function clearRuntimeDebugEvents(options = {}) {
     }
 }
 
+function buildRuntimeVariablePresetState(projectSchema = project.value) {
+    return (Array.isArray(projectSchema?.runtimeVariablePresets)
+        ? projectSchema.runtimeVariablePresets
+        : []
+    ).reduce((accumulator, preset) => {
+        const key = String(preset?.key ?? "").trim();
+
+        if (!key) {
+            return accumulator;
+        }
+
+        accumulator[key] = parseDynamicRuntimeValue(preset?.value);
+        return accumulator;
+    }, {});
+}
+
 function resetWidgetRuntimeState() {
     widgetRuntimeState.value = {};
 }
 
-function resetRuntimeVariables() {
+function clearRuntimeVariables() {
     runtimeVariables.value = {};
+}
+
+function resetRuntimeVariables(projectSchema = project.value) {
+    runtimeVariables.value = buildRuntimeVariablePresetState(projectSchema);
 }
 
 function resetRuntimeFilters() {
@@ -809,7 +832,7 @@ function parseInteractionPropsPatch(text, scope) {
     }
 }
 
-function normalizeConditionOperand(value) {
+function parseDynamicRuntimeValue(value) {
     if (typeof value !== "string") {
         return value;
     }
@@ -848,6 +871,10 @@ function normalizeConditionOperand(value) {
     }
 
     return trimmed;
+}
+
+function normalizeConditionOperand(value) {
+    return parseDynamicRuntimeValue(value);
 }
 
 function doesConditionOperatorUseValue(operator) {
@@ -1206,6 +1233,7 @@ function createBlankProjectState(name = "页面 1") {
 
     return {
         dataSources: [],
+        runtimeVariablePresets: [],
         pages: [page],
         activePageId: page.id,
     };
@@ -2357,6 +2385,34 @@ async function copyRuntimeDebugSnapshot() {
             detail: `${runtimeDebugEvents.value.length} 条事件，${runtimeDebugSources.value.length} 个数据源，${runtimeDebugVariables.value.length} 个变量`,
         });
     }
+}
+
+async function resetRuntimeVariablesToPresets() {
+    resetRuntimeVariables();
+    await triggerConditionMatchInteractions(getActiveInteractivePageId(), {
+        reason: "runtime-variable-reset",
+    });
+    statusMessage.value = "已按项目预设重置运行时变量";
+    pushRuntimeDebugEvent({
+        level: "info",
+        category: "runtime",
+        title: "运行时变量已重置",
+        detail: `${runtimeDebugVariables.value.length} 个变量已恢复为项目预设`,
+    });
+}
+
+async function clearRuntimeVariablesForSession() {
+    clearRuntimeVariables();
+    await triggerConditionMatchInteractions(getActiveInteractivePageId(), {
+        reason: "runtime-variable-clear",
+    });
+    statusMessage.value = "已清空当前运行时变量";
+    pushRuntimeDebugEvent({
+        level: "warning",
+        category: "runtime",
+        title: "运行时变量已清空",
+        detail: "当前会话的变量值已全部移除",
+    });
 }
 
 function clearLinkedWidgetState() {
@@ -4830,6 +4886,8 @@ onBeforeUnmount(() => {
             @copy-runtime-link="copyRuntimeLink"
             @copy-debug-snapshot="copyRuntimeDebugSnapshot"
             @clear-debug-events="clearRuntimeDebugEvents"
+            @reset-runtime-variables="resetRuntimeVariablesToPresets"
+            @clear-runtime-variables="clearRuntimeVariablesForSession"
             @trigger-widget-action="handleWidgetAction"
             @widget-command="handleWidgetCommand"
         />

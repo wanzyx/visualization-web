@@ -735,6 +735,11 @@ button:disabled {
     gap: 10px;
 }
 
+.runtime-debug__section-title {
+    display: grid;
+    gap: 2px;
+}
+
 .runtime-debug__section-head span {
     color: rgba(235, 247, 255, 0.56);
     font-size: 11px;
@@ -744,6 +749,13 @@ button:disabled {
 
 .runtime-debug__section-head strong {
     font-size: 13px;
+}
+
+.runtime-debug__section-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
 }
 
 .runtime-debug__section-tip {
@@ -4153,6 +4165,49 @@ button.inspector-section__toggle:hover {
     font-size: 16px;
 }
 
+.runtime-variable-list {
+    display: grid;
+    gap: 12px;
+}
+
+.runtime-variable-card {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid rgba(72, 220, 255, 0.1);
+    border-radius: 18px;
+    background:
+        linear-gradient(180deg, rgba(8, 18, 32, 0.82), rgba(4, 11, 22, 0.72)),
+        rgba(4, 11, 22, 0.72);
+}
+
+.runtime-variable-card__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.runtime-variable-card__head strong {
+    font-size: 14px;
+    color: var(--text-1);
+}
+
+.runtime-variable-card__textarea {
+    min-height: 112px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 12px;
+    line-height: 1.65;
+}
+
+.runtime-variable-card__meta {
+    font-size: 12px;
+}
+
+.runtime-variable-card__meta.is-warning {
+    color: #ffb3a8;
+}
+
 .inspector-empty {
     padding: 12px 14px;
     border: 1px dashed rgba(79, 227, 255, 0.18);
@@ -5248,6 +5303,16 @@ button.interaction-edge__target:hover {
 
     .interaction-condition__toolbar label {
         min-width: 0;
+    }
+
+    .runtime-variable-card__head,
+    .runtime-debug__section-head {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .runtime-debug__section-actions {
+        justify-content: flex-start;
     }
 
     .interaction-overview__focus-grid {
