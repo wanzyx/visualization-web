@@ -6,6 +6,8 @@ export const interactionActionOptions = [
     { value: "show-widgets", label: "显示组件" },
     { value: "hide-widgets", label: "隐藏组件" },
     { value: "toggle-widgets-visibility", label: "切换显隐" },
+    { value: "patch-widget-props", label: "更新组件属性" },
+    { value: "set-runtime-variable", label: "设置运行时变量" },
 ];
 
 export const alignOptions = [

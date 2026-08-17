@@ -1329,7 +1329,7 @@ function toPathSegments(path) {
         .filter(Boolean);
 }
 
-function getValueByPath(target, path) {
+export function getValueByPath(target, path) {
     const segments = toPathSegments(path);
 
     if (!segments.length) {

@@ -482,6 +482,8 @@ button:disabled {
 
 .runtime-toolbar__actions {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 10px;
 }
 
@@ -521,6 +523,359 @@ button:disabled {
 
 .runtime-shell__canvas {
     min-height: 0;
+    position: relative;
+}
+
+.runtime-debug {
+    position: absolute;
+    top: 18px;
+    right: 22px;
+    bottom: 22px;
+    width: min(360px, calc(100vw - 44px));
+    pointer-events: none;
+}
+
+.runtime-debug__panel {
+    display: grid;
+    height: 100%;
+    min-height: 0;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    border: 1px solid rgba(72, 220, 255, 0.14);
+    border-radius: 24px;
+    background:
+        linear-gradient(180deg, rgba(7, 18, 34, 0.94), rgba(4, 11, 21, 0.9)),
+        radial-gradient(
+            circle at top right,
+            rgba(121, 255, 179, 0.08),
+            transparent 34%
+        );
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        0 24px 54px rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(22px);
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(calc(100% + 24px));
+    transition:
+        transform 0.24s ease,
+        opacity 0.24s ease;
+}
+
+.runtime-debug.is-open .runtime-debug__panel {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0);
+}
+
+.runtime-debug__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px 16px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.runtime-debug__header p,
+.runtime-debug__header h3,
+.runtime-debug__section p,
+.runtime-debug__section small,
+.runtime-debug__section em,
+.runtime-debug__section strong,
+.runtime-debug__section span {
+    margin: 0;
+}
+
+.runtime-debug__header p {
+    color: rgba(235, 247, 255, 0.56);
+    font-size: 11px;
+    letter-spacing: 1.8px;
+    text-transform: uppercase;
+}
+
+.runtime-debug__header h3 {
+    margin-top: 4px;
+    font-size: 18px;
+}
+
+.runtime-debug__actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.runtime-debug__summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    padding: 14px 16px 12px;
+}
+
+.runtime-debug__metric {
+    display: grid;
+    gap: 4px;
+    padding: 12px 14px;
+    border: 1px solid rgba(72, 220, 255, 0.12);
+    border-radius: 18px;
+    background:
+        linear-gradient(180deg, rgba(12, 25, 46, 0.82), rgba(7, 15, 29, 0.72)),
+        rgba(7, 15, 29, 0.72);
+}
+
+.runtime-debug__metric.is-warning {
+    border-color: rgba(255, 134, 110, 0.28);
+    background:
+        linear-gradient(
+            180deg,
+            rgba(42, 19, 18, 0.88),
+            rgba(24, 11, 14, 0.78)
+        ),
+        rgba(24, 11, 14, 0.78);
+}
+
+.runtime-debug__metric span {
+    color: rgba(235, 247, 255, 0.54);
+    font-size: 11px;
+}
+
+.runtime-debug__metric strong {
+    font-size: 22px;
+    line-height: 1;
+}
+
+.runtime-debug__metric small {
+    color: var(--text-2);
+    font-size: 11px;
+}
+
+.runtime-debug__content {
+    min-height: 0;
+    padding: 0 16px 16px;
+    display: grid;
+    gap: 12px;
+    overflow: auto;
+    --scrollbar-track-current: transparent;
+    --scrollbar-track-edge-current: transparent;
+    --scrollbar-thumb-current: rgba(86, 224, 255, 0.08);
+    --scrollbar-thumb-hover-current: rgba(121, 255, 179, 0.28);
+    --scrollbar-thumb-glow-current: transparent;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb-current)
+        var(--scrollbar-track-current);
+}
+
+.runtime-debug__content:hover,
+.runtime-debug__content:focus-within {
+    --scrollbar-track-current: rgba(7, 18, 34, 0.14);
+    --scrollbar-track-edge-current: rgba(72, 220, 255, 0.03);
+    --scrollbar-thumb-current: rgba(86, 224, 255, 0.18);
+    --scrollbar-thumb-hover-current: rgba(121, 255, 179, 0.32);
+    --scrollbar-thumb-glow-current: rgba(72, 220, 255, 0.04);
+    scrollbar-color: var(--scrollbar-thumb-current)
+        var(--scrollbar-track-current);
+}
+
+.runtime-debug__content::-webkit-scrollbar {
+    width: var(--scrollbar-size);
+    height: var(--scrollbar-size);
+}
+
+.runtime-debug__content::-webkit-scrollbar-track {
+    border: 1px solid var(--scrollbar-track-edge-current);
+    border-radius: 999px;
+    background: linear-gradient(
+        180deg,
+        rgba(5, 13, 24, 0.2),
+        var(--scrollbar-track-current)
+    );
+}
+
+.runtime-debug__content::-webkit-scrollbar-thumb {
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: linear-gradient(
+        180deg,
+        var(--scrollbar-thumb-current),
+        rgba(121, 255, 179, 0.1)
+    );
+    background-clip: padding-box;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.02),
+        0 0 8px var(--scrollbar-thumb-glow-current);
+}
+
+.runtime-debug__content::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(
+        180deg,
+        rgba(98, 233, 255, 0.24),
+        var(--scrollbar-thumb-hover-current)
+    );
+    background-clip: padding-box;
+}
+
+.runtime-debug__content::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+.runtime-debug__section {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 18px;
+    background: rgba(7, 16, 30, 0.72);
+}
+
+.runtime-debug__section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.runtime-debug__section-head span {
+    color: rgba(235, 247, 255, 0.56);
+    font-size: 11px;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+}
+
+.runtime-debug__section-head strong {
+    font-size: 13px;
+}
+
+.runtime-debug__section-tip {
+    color: var(--text-2);
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.runtime-debug__chip-list,
+.runtime-debug__source-list,
+.runtime-debug__event-list {
+    display: grid;
+    gap: 10px;
+}
+
+.runtime-debug__chip {
+    display: grid;
+    gap: 4px;
+    padding: 12px;
+    border: 1px solid rgba(72, 220, 255, 0.12);
+    border-radius: 14px;
+    background: rgba(10, 22, 40, 0.78);
+}
+
+.runtime-debug__chip span,
+.runtime-debug__source p,
+.runtime-debug__source small,
+.runtime-debug__event p,
+.runtime-debug__event small,
+.runtime-debug__empty {
+    color: var(--text-2);
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.runtime-debug__chip em {
+    color: #c8ffdf;
+    font-size: 12px;
+    font-style: normal;
+    word-break: break-word;
+}
+
+.runtime-debug__source,
+.runtime-debug__event {
+    display: grid;
+    gap: 6px;
+    padding: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 14px;
+    background: rgba(8, 19, 35, 0.68);
+}
+
+.runtime-debug__source.is-error,
+.runtime-debug__event.is-error {
+    border-color: rgba(255, 134, 110, 0.24);
+    background: rgba(40, 14, 18, 0.58);
+}
+
+.runtime-debug__event.is-success {
+    border-color: rgba(121, 255, 179, 0.2);
+}
+
+.runtime-debug__event.is-warning {
+    border-color: rgba(255, 201, 117, 0.22);
+    background: rgba(37, 25, 8, 0.48);
+}
+
+.runtime-debug__source-head,
+.runtime-debug__event-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.runtime-debug__source-head span,
+.runtime-debug__event-head span {
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(72, 220, 255, 0.1);
+    color: rgba(235, 247, 255, 0.72);
+    font-size: 10px;
+}
+
+.runtime-debug__source.is-error .runtime-debug__source-head span,
+.runtime-debug__event.is-error .runtime-debug__event-head span {
+    background: rgba(255, 134, 110, 0.16);
+    color: #ffd3cb;
+}
+
+.runtime-debug__event.is-success .runtime-debug__event-head span {
+    background: rgba(121, 255, 179, 0.14);
+    color: #ccffe4;
+}
+
+.runtime-debug__event.is-warning .runtime-debug__event-head span {
+    background: rgba(255, 201, 117, 0.16);
+    color: #ffe2ae;
+}
+
+.runtime-debug__source em {
+    color: #ffd7cf;
+    font-size: 12px;
+    font-style: normal;
+    line-height: 1.55;
+}
+
+.runtime-debug__empty {
+    margin: 0;
+}
+
+@media (max-width: 1360px) {
+    .runtime-debug {
+        top: 12px;
+        right: 12px;
+        bottom: 12px;
+        width: min(320px, calc(100vw - 24px));
+    }
+
+    .runtime-debug__header,
+    .runtime-debug__summary,
+    .runtime-debug__content {
+        padding-left: 14px;
+        padding-right: 14px;
+    }
+}
+
+@media (max-width: 960px) {
+    .runtime-debug {
+        left: 12px;
+        width: auto;
+    }
 }
 
 .side-panel {
@@ -3905,6 +4260,260 @@ button.interaction-card__summary:hover {
     gap: 12px;
 }
 
+.interaction-condition {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid rgba(72, 220, 255, 0.1);
+    border-radius: 16px;
+    background: rgba(7, 17, 31, 0.62);
+}
+
+.interaction-condition__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.interaction-condition__head span {
+    color: var(--text-1);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.interaction-condition__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-2);
+    font-size: 12px;
+}
+
+.interaction-condition__toggle input {
+    accent-color: var(--accent-2);
+}
+
+.interaction-condition__toggle em {
+    font-style: normal;
+}
+
+.interaction-condition__body {
+    display: grid;
+    gap: 10px;
+}
+
+.interaction-condition__toolbar {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.interaction-condition__toolbar label {
+    display: grid;
+    gap: 6px;
+    min-width: 180px;
+}
+
+.interaction-condition__rules {
+    display: grid;
+    gap: 10px;
+}
+
+.interaction-condition__rule {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid rgba(72, 220, 255, 0.08);
+    border-radius: 14px;
+    background: rgba(6, 15, 28, 0.68);
+}
+
+.interaction-condition__rule-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.interaction-condition__rule-head strong {
+    color: var(--text-1);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.interaction-config__textarea {
+    min-height: 140px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 12px;
+    line-height: 1.65;
+}
+
+.interaction-overview {
+    display: grid;
+    gap: 12px;
+}
+
+.interaction-overview__toolbar {
+    display: grid;
+    gap: 10px;
+}
+
+.interaction-overview__stats,
+.interaction-overview__scope {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.interaction-overview__stat {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 10px;
+    border: 1px solid rgba(72, 220, 255, 0.14);
+    border-radius: 999px;
+    background: rgba(8, 18, 34, 0.58);
+    color: var(--text-2);
+    font-size: 12px;
+}
+
+.interaction-overview__scope .inspector-inline-button.is-active {
+    border-color: rgba(121, 255, 179, 0.3);
+    background: rgba(121, 255, 179, 0.14);
+    color: #dcffee;
+}
+
+.interaction-overview__focus-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.interaction-overview__focus-card,
+.interaction-edge {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 18px;
+    background:
+        linear-gradient(180deg, rgba(5, 14, 28, 0.74), rgba(4, 11, 22, 0.58)),
+        radial-gradient(
+            circle at top right,
+            rgba(121, 255, 179, 0.06),
+            transparent 34%
+        );
+}
+
+.interaction-overview__focus-head,
+.interaction-edge__head {
+    display: grid;
+    gap: 8px;
+}
+
+.interaction-overview__focus-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+}
+
+.interaction-overview__focus-head span {
+    color: rgba(235, 247, 255, 0.62);
+    font-size: 12px;
+}
+
+.interaction-overview__focus-head strong {
+    font-size: 20px;
+}
+
+.interaction-overview__mini-list,
+.interaction-overview__list {
+    display: grid;
+    gap: 10px;
+}
+
+button.interaction-overview__mini-item,
+button.interaction-edge__source,
+button.interaction-edge__target {
+    display: grid;
+    justify-items: start;
+    gap: 4px;
+    width: 100%;
+    min-height: 0;
+    padding: 10px 12px;
+    border: 1px solid rgba(72, 220, 255, 0.12);
+    border-radius: 14px;
+    background: rgba(8, 19, 35, 0.72);
+    box-shadow: none;
+    color: inherit;
+    text-align: left;
+}
+
+button.interaction-overview__mini-item:hover,
+button.interaction-edge__source:hover,
+button.interaction-edge__target:hover {
+    transform: translateY(-1px);
+    border-color: rgba(72, 220, 255, 0.24);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.12);
+}
+
+.interaction-overview__mini-item span,
+.interaction-edge__source span,
+.interaction-edge__source small,
+.interaction-edge__target small {
+    color: var(--text-2);
+    font-size: 12px;
+}
+
+.interaction-edge__meta,
+.interaction-edge__targets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.interaction-edge__meta span,
+.interaction-edge__badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 26px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: rgba(72, 220, 255, 0.08);
+    color: rgba(235, 247, 255, 0.72);
+    font-size: 11px;
+}
+
+.interaction-edge__summary {
+    margin: 0;
+    color: var(--text-1);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.interaction-edge__condition {
+    margin: 0;
+    color: rgba(121, 255, 179, 0.86);
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.interaction-edge__target {
+    width: auto;
+    min-width: 120px;
+}
+
+.interaction-edge__target--page {
+    border-color: rgba(121, 255, 179, 0.2);
+}
+
+.interaction-edge__badge.is-missing {
+    background: rgba(255, 134, 110, 0.14);
+    color: #ffd7cf;
+}
+
 .layer-list {
     display: grid;
     gap: 10px;
@@ -4624,6 +5233,24 @@ button.interaction-card__summary:hover {
 
     .interaction-flow__toolbar,
     .interaction-card__header {
+        grid-template-columns: 1fr;
+    }
+
+    .interaction-condition__head {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .interaction-condition__toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .interaction-condition__toolbar label {
+        min-width: 0;
+    }
+
+    .interaction-overview__focus-grid {
         grid-template-columns: 1fr;
     }
 

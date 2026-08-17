@@ -15,6 +15,7 @@ import TopToolbar from "./components/TopToolbar.vue";
 import { materials, createWidget } from "./editor/materials";
 import {
     createDataSource,
+    getValueByPath,
     normalizeDataSource,
     resolveDataSourceRuntime,
 } from "./editor/dataSources";
@@ -48,6 +49,38 @@ const HISTORY_MERGE_WINDOW = 600;
 const PROJECT_SYNC_DELAY = 120;
 const TEMPLATE_LIMIT = 30;
 const LINKED_WIDGET_DURATION = 1800;
+const RUNTIME_DEBUG_EVENT_LIMIT = 80;
+const CONDITION_VALUE_OPERATORS = new Set([
+    "eq",
+    "neq",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "includes",
+]);
+const CONDITION_LOGICS = new Set(["all", "any"]);
+const CONDITION_SOURCE_LABEL_MAP = {
+    "widget-props": "当前组件运行值",
+    "source-payload": "绑定数据源 payload",
+    "runtime-variables": "运行时变量",
+};
+const CONDITION_LOGIC_LABEL_MAP = {
+    all: "满足全部",
+    any: "满足任一",
+};
+const CONDITION_OPERATOR_LABEL_MAP = {
+    truthy: "有值/为真",
+    falsy: "为空/为假",
+    exists: "字段存在",
+    eq: "等于",
+    neq: "不等于",
+    gt: "大于",
+    gte: "大于等于",
+    lt: "小于",
+    lte: "小于等于",
+    includes: "包含",
+};
 const PROJECT_LIBRARY_STORAGE_KEY = "visualization-web-project-library-v1";
 const ACTIVE_PROJECT_STORAGE_KEY = "visualization-web-active-project-v1";
 
@@ -68,16 +101,21 @@ const activeProjectRecordId = ref(initialProjectState.activeProjectId);
 const templates = ref(loadTemplateLibrary());
 const dataSourceRuntime = ref({});
 const widgetRuntimeState = ref({});
+const runtimeVariables = ref({});
 const runtimeFilters = ref({});
+const runtimeDebugEvents = ref([]);
 const linkedWidgetIds = ref([]);
 const runtimePageId = ref(initialRoute.pageId || "");
 const clipboardTemplate = ref(null);
 
 const sourceRefreshTimers = new Map();
+const sourceRefreshRunState = new Map();
+const conditionMatchState = new Map();
 const interactionTimers = new Set();
 let linkedWidgetTimerId = 0;
 let projectSyncTimerId = 0;
 let interactionRunToken = 0;
+let interactivePageInitToken = 0;
 let lastProjectSnapshot = JSON.stringify(project.value);
 
 const isRuntimeMode = computed(() => appMode.value === "runtime");
@@ -206,6 +244,105 @@ const currentProjectName = computed(
         deriveProjectRecordName(project.value),
 );
 
+const runtimeDebugSummary = computed(() => {
+    const sourceEntries = project.value.dataSources.map((source) => {
+        const runtime =
+            dataSourceRuntime.value[source.id] ?? createSourceRuntimeEntry(source);
+        return {
+            id: source.id,
+            updatedAt: runtime.updatedAt,
+            error: runtime.error,
+        };
+    });
+    const visibleWidgetCount = currentWidgets.value.filter(
+        (widget) => !widget.hidden,
+    ).length;
+
+    return {
+        mode: isRuntimeMode.value
+            ? "runtime"
+            : previewMode.value
+              ? "preview"
+              : "editor",
+        pageId: currentPageId.value,
+        pageName: currentPage.value?.name ?? "未命名页面",
+        pageTitle: currentPage.value?.meta?.title ?? "未命名大屏",
+        widgetCount: currentWidgets.value.length,
+        visibleWidgetCount,
+        hiddenWidgetCount: Math.max(
+            currentWidgets.value.length - visibleWidgetCount,
+            0,
+        ),
+        sourceCount: sourceEntries.length,
+        refreshedSourceCount: sourceEntries.filter((item) => item.updatedAt)
+            .length,
+        errorSourceCount: sourceEntries.filter((item) => item.error).length,
+        activeFilterCount: Object.keys(runtimeFilters.value).length,
+        linkedWidgetCount: linkedWidgetIds.value.length,
+        variableCount: Object.keys(runtimeVariables.value).length,
+    };
+});
+
+const runtimeDebugFilters = computed(() =>
+    Object.values(runtimeFilters.value).map((filter) => {
+        const widget = findWidgetAcrossPages(filter.widgetId);
+
+        return {
+            widgetId: filter.widgetId,
+            widgetName: widget?.name ?? "未命名组件",
+            field: filter.field,
+            value: filter.value,
+            label: filter.label,
+            targetWidgetIds: Array.isArray(filter.targetWidgetIds)
+                ? filter.targetWidgetIds
+                : [],
+        };
+    }),
+);
+
+const runtimeDebugVariables = computed(() =>
+    Object.entries(runtimeVariables.value)
+        .map(([key, value]) => ({
+            key,
+            value,
+            preview: formatRuntimeDebugValue(value, 96),
+            type: Array.isArray(value) ? "array" : typeof value,
+        }))
+        .sort((left, right) => left.key.localeCompare(right.key, "zh-CN")),
+);
+
+const runtimeDebugSources = computed(() =>
+    project.value.dataSources
+        .map((source) => {
+            const runtime =
+                dataSourceRuntime.value[source.id] ??
+                createSourceRuntimeEntry(source);
+
+            return {
+                id: source.id,
+                name: source.name,
+                type: source.type,
+                generator: source.generator,
+                updatedAt: runtime.updatedAt,
+                refreshCount: runtime.refreshCount ?? 0,
+                responseStatus: runtime.responseStatus,
+                responseStatusText: runtime.responseStatusText ?? "",
+                mappedFieldCount: runtime.mappedFieldCount ?? 0,
+                error: runtime.error ?? "",
+            };
+        })
+        .sort((left, right) => {
+            const leftWeight = left.error ? 0 : left.updatedAt ? 1 : 2;
+            const rightWeight = right.error ? 0 : right.updatedAt ? 1 : 2;
+
+            if (leftWeight !== rightWeight) {
+                return leftWeight - rightWeight;
+            }
+
+            return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
+        }),
+);
+
 function getSourceInteractionLabel(actionType) {
     switch (actionType) {
         case "refresh-sources":
@@ -290,8 +427,52 @@ function cloneDeep(value) {
     return JSON.parse(JSON.stringify(value));
 }
 
+function clearConditionMatchState() {
+    conditionMatchState.clear();
+}
+
+function canCaptureRuntimeDebug() {
+    return previewMode.value || isRuntimeMode.value;
+}
+
+function pushRuntimeDebugEvent(entry = {}) {
+    if (!entry.title || (!canCaptureRuntimeDebug() && entry.force !== true)) {
+        return;
+    }
+
+    const nextEvent = {
+        id:
+            globalThis.crypto?.randomUUID?.() ??
+            `runtime-debug-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        at: entry.at ?? Date.now(),
+        level: entry.level ?? "info",
+        category: entry.category ?? "runtime",
+        title: entry.title,
+        detail: entry.detail ?? "",
+        pageId: entry.pageId ?? currentPageId.value,
+        pageName: entry.pageName ?? currentPage.value?.name ?? "",
+    };
+
+    runtimeDebugEvents.value = [nextEvent, ...runtimeDebugEvents.value].slice(
+        0,
+        RUNTIME_DEBUG_EVENT_LIMIT,
+    );
+}
+
+function clearRuntimeDebugEvents(options = {}) {
+    runtimeDebugEvents.value = [];
+
+    if (!options.silent) {
+        statusMessage.value = "已清空运行态调试记录";
+    }
+}
+
 function resetWidgetRuntimeState() {
     widgetRuntimeState.value = {};
+}
+
+function resetRuntimeVariables() {
+    runtimeVariables.value = {};
 }
 
 function resetRuntimeFilters() {
@@ -309,9 +490,11 @@ function resetRuntimeFilters() {
                 ? { ...currentState.propsPatch }
                 : null;
 
-        if (nextPropsPatch && "activeValue" in nextPropsPatch) {
-            delete nextPropsPatch.activeValue;
-        }
+        ["activeValue", "activeProvince", "activeCategory"].forEach((key) => {
+            if (nextPropsPatch && key in nextPropsPatch) {
+                delete nextPropsPatch[key];
+            }
+        });
 
         if (nextPropsPatch && Object.keys(nextPropsPatch).length) {
             currentState.propsPatch = nextPropsPatch;
@@ -358,6 +541,20 @@ function setRuntimeWidgetPropsPatch(widgetId, propsPatch = {}) {
             },
         },
     };
+}
+
+function setRuntimeVariable(key, value) {
+    const nextKey = String(key ?? "").trim();
+
+    if (!nextKey) {
+        return false;
+    }
+
+    runtimeVariables.value = {
+        ...runtimeVariables.value,
+        [nextKey]: value,
+    };
+    return true;
 }
 
 function applyRuntimeFilterWidget(widget, value, label = "") {
@@ -516,6 +713,446 @@ function buildRuntimeWidgetView(widget) {
     };
 }
 
+function formatRuntimeDebugValue(value, maxLength = 72) {
+    const serialized =
+        value == null
+            ? "null"
+            : typeof value === "string"
+              ? value
+              : (() => {
+                    try {
+                        return JSON.stringify(value);
+                    } catch (error) {
+                        console.warn(error);
+                        return String(value);
+                    }
+                })();
+
+    if (serialized.length <= maxLength) {
+        return serialized;
+    }
+
+    return `${serialized.slice(0, Math.max(maxLength - 1, 0))}…`;
+}
+
+function getInteractionTemplateScope(widget) {
+    const runtimeWidget = buildRuntimeWidgetView(widget) ?? widget;
+    const sourceId = runtimeWidget.dataBinding?.sourceId || widget?.dataBinding?.sourceId;
+    const sourcePayload = sourceId
+        ? (dataSourceRuntime.value[sourceId]?.payload ??
+          findDataSource(sourceId)?.payload ??
+          null)
+        : null;
+
+    return {
+        widget: runtimeWidget?.props ?? {},
+        source: sourcePayload,
+        runtime: runtimeVariables.value,
+        page: {
+            id: currentPage.value?.id ?? "",
+            name: currentPage.value?.name ?? "",
+            title: currentPage.value?.meta?.title ?? "",
+        },
+    };
+}
+
+function readInteractionTemplateValue(scope, expression) {
+    const trimmed = String(expression ?? "").trim();
+    const matched = trimmed.match(/^(widget|source|runtime|page)(?:\.(.+))?$/);
+
+    if (!matched) {
+        return undefined;
+    }
+
+    const rootValue = scope[matched[1]];
+
+    return matched[2] ? getValueByPath(rootValue, matched[2]) : rootValue;
+}
+
+function formatInteractionTemplateInlineValue(value) {
+    if (value === null || value === undefined) {
+        return "";
+    }
+
+    if (typeof value === "string") {
+        return value;
+    }
+
+    if (typeof value === "number" || typeof value === "boolean") {
+        return String(value);
+    }
+
+    return formatRuntimeDebugValue(value, 120);
+}
+
+function resolveInteractionTemplateString(template, scope) {
+    if (typeof template !== "string") {
+        return template;
+    }
+
+    const exactMatch = template.match(/^\s*\{\{\s*([^{}]+?)\s*\}\}\s*$/);
+
+    if (exactMatch) {
+        const resolved = readInteractionTemplateValue(scope, exactMatch[1]);
+        return resolved === undefined ? "" : resolved;
+    }
+
+    return template.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, expression) =>
+        formatInteractionTemplateInlineValue(
+            readInteractionTemplateValue(scope, expression),
+        ),
+    );
+}
+
+function resolveInteractionTemplateValue(value, scope) {
+    if (Array.isArray(value)) {
+        return value.map((item) => resolveInteractionTemplateValue(item, scope));
+    }
+
+    if (value && typeof value === "object") {
+        return Object.fromEntries(
+            Object.entries(value).map(([key, entryValue]) => [
+                key,
+                resolveInteractionTemplateValue(entryValue, scope),
+            ]),
+        );
+    }
+
+    return resolveInteractionTemplateString(value, scope);
+}
+
+function parseInteractionPropsPatch(text, scope) {
+    const rawText = String(text ?? "").trim() || "{}";
+
+    try {
+        const parsed = JSON.parse(rawText);
+
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return {
+                ok: false,
+                error: "组件属性更新仅支持 JSON 对象",
+            };
+        }
+
+        return {
+            ok: true,
+            value: resolveInteractionTemplateValue(parsed, scope),
+        };
+    } catch (error) {
+        console.warn(error);
+        return {
+            ok: false,
+            error: "组件属性 JSON 解析失败",
+        };
+    }
+}
+
+function normalizeConditionOperand(value) {
+    if (typeof value !== "string") {
+        return value;
+    }
+
+    const trimmed = value.trim();
+
+    if (!trimmed.length) {
+        return "";
+    }
+
+    if (trimmed === "true") {
+        return true;
+    }
+
+    if (trimmed === "false") {
+        return false;
+    }
+
+    if (trimmed === "null") {
+        return null;
+    }
+
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+        return Number(trimmed);
+    }
+
+    if (
+        (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+        (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
+        try {
+            return JSON.parse(trimmed);
+        } catch (error) {
+            console.warn(error);
+        }
+    }
+
+    return trimmed;
+}
+
+function doesConditionOperatorUseValue(operator) {
+    return CONDITION_VALUE_OPERATORS.has(operator);
+}
+
+function isLegacyInteractionConditionShape(condition) {
+    return Boolean(
+        condition &&
+            typeof condition === "object" &&
+            !Array.isArray(condition) &&
+            ("source" in condition ||
+                "field" in condition ||
+                "operator" in condition ||
+                "value" in condition),
+    );
+}
+
+function normalizeInteractionConditionRule(rule) {
+    return {
+        source:
+            rule?.source === "source-payload" ? "source-payload" : "widget-props",
+        field: typeof rule?.field === "string" ? rule.field.trim() : "",
+        operator:
+            typeof rule?.operator === "string" && rule.operator.trim()
+                ? rule.operator
+                : "truthy",
+        value: rule?.value == null ? "" : String(rule.value),
+    };
+}
+
+function getInteractionConditionConfig(action) {
+    const condition = action?.condition;
+
+    if (!condition || typeof condition !== "object" || Array.isArray(condition)) {
+        return {
+            enabled: false,
+            logic: "all",
+            rules: [],
+        };
+    }
+
+    const rules = Array.isArray(condition.rules)
+        ? condition.rules.map((rule) => normalizeInteractionConditionRule(rule))
+        : isLegacyInteractionConditionShape(condition)
+          ? [normalizeInteractionConditionRule(condition)]
+          : [];
+
+    return {
+        enabled: Boolean(condition.enabled),
+        logic: CONDITION_LOGICS.has(condition.logic) ? condition.logic : "all",
+        rules,
+    };
+}
+
+function hasConfiguredInteractionCondition(action) {
+    return getInteractionConditionConfig(action).enabled;
+}
+
+function formatInteractionConditionRuleSummary(rule) {
+    const sourceLabel =
+        CONDITION_SOURCE_LABEL_MAP[rule.source] ?? "当前组件运行值";
+    const fieldLabel = rule.field?.trim() || "(整体值)";
+    const operatorLabel = CONDITION_OPERATOR_LABEL_MAP[rule.operator] ?? "命中";
+
+    if (!doesConditionOperatorUseValue(rule.operator)) {
+        return `${sourceLabel} · ${fieldLabel} ${operatorLabel}`;
+    }
+
+    return `${sourceLabel} · ${fieldLabel} ${operatorLabel} ${rule.value}`;
+}
+
+function formatInteractionConditionSummary(action) {
+    const condition = getInteractionConditionConfig(action);
+
+    if (!condition.enabled) {
+        return "";
+    }
+
+    if (!condition.rules.length) {
+        return "已启用，但尚未配置条件";
+    }
+
+    const summary = condition.rules.map((rule) =>
+        formatInteractionConditionRuleSummary(rule),
+    );
+
+    return summary.length > 1
+        ? `${CONDITION_LOGIC_LABEL_MAP[condition.logic] ?? "满足全部"}：${summary.join(
+              condition.logic === "any" ? " 或 " : " 且 ",
+          )}`
+        : summary[0];
+}
+
+function isConditionValuePresent(value) {
+    if (value === null || value === undefined) {
+        return false;
+    }
+
+    if (typeof value === "string") {
+        return value.trim().length > 0;
+    }
+
+    if (Array.isArray(value)) {
+        return value.length > 0;
+    }
+
+    return true;
+}
+
+function compareConditionEquality(actual, expected) {
+    const normalizedActual = normalizeConditionOperand(actual);
+    const normalizedExpected = normalizeConditionOperand(expected);
+
+    if (
+        normalizedActual &&
+        normalizedExpected &&
+        typeof normalizedActual === "object" &&
+        typeof normalizedExpected === "object"
+    ) {
+        return JSON.stringify(normalizedActual) === JSON.stringify(normalizedExpected);
+    }
+
+    return normalizedActual === normalizedExpected;
+}
+
+function evaluateConditionComparison(actual, operator, expectedRaw) {
+    const expected = normalizeConditionOperand(expectedRaw);
+
+    switch (operator) {
+        case "truthy":
+            return Boolean(actual);
+        case "falsy":
+            return !actual;
+        case "exists":
+            return isConditionValuePresent(actual);
+        case "eq":
+            return compareConditionEquality(actual, expected);
+        case "neq":
+            return !compareConditionEquality(actual, expected);
+        case "gt":
+        case "gte":
+        case "lt":
+        case "lte": {
+            const left = Number(actual);
+            const right = Number(expected);
+
+            if (!Number.isFinite(left) || !Number.isFinite(right)) {
+                return false;
+            }
+
+            if (operator === "gt") {
+                return left > right;
+            }
+
+            if (operator === "gte") {
+                return left >= right;
+            }
+
+            if (operator === "lt") {
+                return left < right;
+            }
+
+            return left <= right;
+        }
+        case "includes":
+            if (typeof actual === "string") {
+                return actual.includes(String(expected ?? ""));
+            }
+
+            if (Array.isArray(actual)) {
+                return actual.some((item) =>
+                    compareConditionEquality(item, expected),
+                );
+            }
+
+            return false;
+        default:
+            return true;
+    }
+}
+
+function getInteractionConditionScope(widget, rule) {
+    const scope = getInteractionTemplateScope(widget);
+
+    if (rule?.source === "source-payload") {
+        return scope.source;
+    }
+
+    if (rule?.source === "runtime-variables") {
+        return scope.runtime;
+    }
+
+    return scope.widget;
+}
+
+function evaluateInteractionConditionRule(widget, rule) {
+    const scope = getInteractionConditionScope(widget, rule);
+    const actualValue = rule.field?.trim()
+        ? getValueByPath(scope, rule.field)
+        : scope;
+
+    return evaluateConditionComparison(actualValue, rule.operator, rule.value);
+}
+
+function evaluateInteractionActionCondition(widget, action) {
+    const condition = getInteractionConditionConfig(action);
+
+    if (!condition.enabled) {
+        return {
+            matched: true,
+            conditional: false,
+            summary: "",
+        };
+    }
+
+    if (!condition.rules.length) {
+        return {
+            matched: false,
+            conditional: true,
+            summary: formatInteractionConditionSummary(action),
+        };
+    }
+
+    const matched =
+        condition.logic === "any"
+            ? condition.rules.some((rule) =>
+                  evaluateInteractionConditionRule(widget, rule),
+              )
+            : condition.rules.every((rule) =>
+                  evaluateInteractionConditionRule(widget, rule),
+              );
+
+    return {
+        matched,
+        conditional: true,
+        summary: formatInteractionConditionSummary(action),
+    };
+}
+
+function getConditionMatchStateKey(pageId, widgetId, actionId) {
+    return `${pageId}:${widgetId}:${actionId}`;
+}
+
+function getInteractionActionLabel(actionType) {
+    switch (actionType) {
+        case "highlight-widgets":
+            return "高亮组件";
+        case "refresh-sources":
+            return "刷新数据源";
+        case "switch-page":
+            return "切换页面";
+        case "show-widgets":
+            return "显示组件";
+        case "hide-widgets":
+            return "隐藏组件";
+        case "toggle-widgets-visibility":
+            return "切换显隐";
+        case "patch-widget-props":
+            return "更新组件属性";
+        case "set-runtime-variable":
+            return "设置运行时变量";
+        default:
+            return "动作";
+    }
+}
+
 function setRuntimeWidgetHidden(widgetIds, hidden) {
     const targetIds = Array.from(new Set(widgetIds.filter(Boolean)));
 
@@ -575,6 +1212,18 @@ function toggleRuntimeWidgetHidden(widgetIds) {
 
     widgetRuntimeState.value = nextState;
     return count;
+}
+
+function getActiveInteractivePageId() {
+    return isRuntimeMode.value
+        ? runtimePageId.value || currentPageId.value
+        : currentPageId.value;
+}
+
+function shouldSyncRuntimeFilterState(widgetIds = []) {
+    return widgetIds.some((widgetId) =>
+        isFilterSourceWidgetType(findWidgetAcrossPages(widgetId)?.type),
+    );
 }
 
 function createProjectRecordId() {
@@ -998,6 +1647,81 @@ function createSourceRuntimeEntry(source, overrides = {}) {
     };
 }
 
+function findDataSource(sourceId) {
+    return (
+        project.value.dataSources.find((item) => item.id === sourceId) ?? null
+    );
+}
+
+function getSourceRefreshRunState(sourceId) {
+    const existing = sourceRefreshRunState.get(sourceId);
+
+    if (existing) {
+        return existing;
+    }
+
+    const nextState = {
+        inFlight: false,
+        queued: false,
+        queuedSilent: true,
+        promise: null,
+    };
+
+    sourceRefreshRunState.set(sourceId, nextState);
+    return nextState;
+}
+
+function clearStaleSourceRefreshRunState() {
+    const validIds = new Set(
+        project.value.dataSources.map((source) => source.id),
+    );
+
+    Array.from(sourceRefreshRunState.keys()).forEach((sourceId) => {
+        if (!validIds.has(sourceId)) {
+            sourceRefreshRunState.delete(sourceId);
+        }
+    });
+}
+
+function normalizeRefreshOptions(options = {}) {
+    return {
+        silent: options.silent === true,
+        triggerConditionMatch: options.triggerConditionMatch !== false,
+    };
+}
+
+function cancelInteractivePageInitialization() {
+    interactivePageInitToken += 1;
+}
+
+function isInteractivePageInitializationActive(token, pageId) {
+    if (token !== interactivePageInitToken) {
+        return false;
+    }
+
+    if (isRuntimeMode.value) {
+        return runtimePageId.value === pageId;
+    }
+
+    return previewMode.value && currentPageId.value === pageId;
+}
+
+function formatRefreshSummary(successCount, failureCount) {
+    if (successCount <= 0 && failureCount <= 0) {
+        return "当前没有可刷新的数据源";
+    }
+
+    if (failureCount <= 0) {
+        return `已刷新 ${successCount} 个数据源`;
+    }
+
+    if (successCount <= 0) {
+        return `数据源刷新失败：${failureCount} 个失败`;
+    }
+
+    return `已刷新 ${successCount} 个数据源，${failureCount} 个失败`;
+}
+
 function syncDataSourceRuntime() {
     const previousRuntime = dataSourceRuntime.value;
     const nextRuntime = {};
@@ -1010,6 +1734,8 @@ function syncDataSourceRuntime() {
     });
 
     dataSourceRuntime.value = nextRuntime;
+    clearStaleSourceRefreshRunState();
+    clearConditionMatchState();
 }
 
 function clearSourceRefreshTimers() {
@@ -1077,10 +1803,10 @@ function syncSourceRefreshTimers() {
     });
 }
 
-async function refreshDataSource(sourceId, options = {}) {
-    const source = project.value.dataSources.find(
-        (item) => item.id === sourceId,
-    );
+async function performDataSourceRefresh(sourceId, options = {}) {
+    const normalizedOptions = normalizeRefreshOptions(options);
+    const source = findDataSource(sourceId);
+    const refreshStartedAt = Date.now();
 
     if (!source) {
         return false;
@@ -1103,13 +1829,21 @@ async function refreshDataSource(sourceId, options = {}) {
 
     try {
         const result = await resolveDataSourceRuntime(source, requestContext);
+        const activeSource = findDataSource(source.id);
+
+        if (!activeSource) {
+            return false;
+        }
+
+        const committedCurrent =
+            dataSourceRuntime.value[source.id] ?? current;
 
         dataSourceRuntime.value = {
             ...dataSourceRuntime.value,
-            [source.id]: createSourceRuntimeEntry(source, {
+            [source.id]: createSourceRuntimeEntry(activeSource, {
                 payload: result.payload,
                 updatedAt: Date.now(),
-                refreshCount: (current.refreshCount ?? 0) + 1,
+                refreshCount: (committedCurrent.refreshCount ?? 0) + 1,
                 error: "",
                 requestPreview: result.meta?.requestPreview ?? null,
                 responseStatus: result.meta?.responseStatus ?? null,
@@ -1119,47 +1853,203 @@ async function refreshDataSource(sourceId, options = {}) {
                 mappedFieldCount: result.meta?.mappedFieldCount ?? 0,
             }),
         };
+
+        pushRuntimeDebugEvent({
+            level: "success",
+            category: "source",
+            title: "数据源刷新完成",
+            detail: [
+                activeSource.name,
+                result.meta?.responseStatus
+                    ? `${result.meta.responseStatus}${result.meta?.responseStatusText ? ` ${result.meta.responseStatusText}` : ""}`
+                    : activeSource.generator === "remote"
+                      ? "远程接口"
+                      : "本地数据",
+                `${Date.now() - refreshStartedAt}ms`,
+            ]
+                .filter(Boolean)
+                .join(" · "),
+        });
+
+        if (
+            normalizedOptions.triggerConditionMatch &&
+            (previewMode.value || isRuntimeMode.value)
+        ) {
+            void triggerConditionMatchInteractions(
+                isRuntimeMode.value
+                    ? runtimePageId.value || currentPageId.value
+                    : currentPageId.value,
+                {
+                    sourceId: activeSource.id,
+                    reason: "source-refresh",
+                },
+            );
+        }
     } catch (error) {
         const message = error instanceof Error ? error.message : "未知错误";
+        const activeSource = findDataSource(source.id);
+
+        if (!activeSource) {
+            return false;
+        }
+
+        const fallbackCurrent =
+            dataSourceRuntime.value[source.id] ?? current;
 
         dataSourceRuntime.value = {
             ...dataSourceRuntime.value,
-            [source.id]: createSourceRuntimeEntry(source, {
-                ...current,
-                payload: current.payload ?? source.payload,
+            [source.id]: createSourceRuntimeEntry(activeSource, {
+                ...fallbackCurrent,
+                payload: fallbackCurrent.payload ?? activeSource.payload,
                 error: message,
             }),
         };
 
-        statusMessage.value = `数据源 ${source.name} 刷新失败：${message}`;
+        statusMessage.value = `数据源 ${activeSource.name} 刷新失败：${message}`;
+        pushRuntimeDebugEvent({
+            level: "error",
+            category: "source",
+            title: "数据源刷新失败",
+            detail: `${activeSource.name} · ${message}`,
+        });
         console.warn(error);
         return false;
     }
 
-    if (!options.silent) {
+    if (!normalizedOptions.silent) {
         statusMessage.value = `已刷新数据源：${source.name}`;
     }
 
     return true;
 }
 
-async function refreshAllDataSources(options = {}) {
-    if (!project.value.dataSources.length) {
-        if (!options.silent) {
-            statusMessage.value = "当前没有可刷新的数据源";
-        }
-        return;
+async function refreshDataSource(sourceId, options = {}) {
+    const normalizedOptions = normalizeRefreshOptions(options);
+    const runState = getSourceRefreshRunState(sourceId);
+
+    if (runState.inFlight) {
+        runState.queued = true;
+        runState.queuedSilent = runState.queuedSilent && normalizedOptions.silent;
+        return runState.promise ?? Promise.resolve(false);
     }
 
-    await Promise.all(
+    runState.inFlight = true;
+    runState.queued = false;
+    runState.queuedSilent = true;
+    runState.promise = (async () => {
+        let effectiveOptions = normalizedOptions;
+        let lastResult = false;
+
+        while (true) {
+            lastResult = await performDataSourceRefresh(
+                sourceId,
+                effectiveOptions,
+            );
+
+            if (!runState.queued) {
+                return lastResult;
+            }
+
+            effectiveOptions = {
+                silent: runState.queuedSilent,
+            };
+            runState.queued = false;
+            runState.queuedSilent = true;
+        }
+    })().finally(() => {
+        runState.inFlight = false;
+        runState.queued = false;
+        runState.queuedSilent = true;
+        runState.promise = null;
+    });
+
+    return runState.promise;
+}
+
+async function refreshAllDataSources(options = {}) {
+    const normalizedOptions = normalizeRefreshOptions(options);
+
+    if (!project.value.dataSources.length) {
+        if (!normalizedOptions.silent) {
+            statusMessage.value = "当前没有可刷新的数据源";
+        }
+        return {
+            successCount: 0,
+            failureCount: 0,
+        };
+    }
+
+    const results = await Promise.all(
         project.value.dataSources.map((source) =>
             refreshDataSource(source.id, { silent: true }),
         ),
     );
+    const successCount = results.filter(Boolean).length;
+    const failureCount = results.length - successCount;
 
-    if (!options.silent) {
-        statusMessage.value = `已刷新 ${project.value.dataSources.length} 个数据源`;
+    if (!normalizedOptions.silent) {
+        statusMessage.value = formatRefreshSummary(
+            successCount,
+            failureCount,
+        );
     }
+
+    return {
+        successCount,
+        failureCount,
+    };
+}
+
+async function initializeInteractivePage(
+    pageId = currentPageId.value,
+    options = {},
+) {
+    const activePageId = pageId || currentPageId.value;
+    const refreshDataSources = options.refreshDataSources !== false;
+
+    if (!activePageId) {
+        return;
+    }
+
+    const token = ++interactivePageInitToken;
+
+    if (refreshDataSources) {
+        await refreshAllDataSources({
+            silent: true,
+            triggerConditionMatch: false,
+        });
+    }
+
+    if (!isInteractivePageInitializationActive(token, activePageId)) {
+        return;
+    }
+
+    syncPageRuntimeFilters(activePageId);
+    await nextTick();
+
+    if (!isInteractivePageInitializationActive(token, activePageId)) {
+        return;
+    }
+
+    await triggerPageEnterInteractions(activePageId);
+
+    if (!isInteractivePageInitializationActive(token, activePageId)) {
+        return;
+    }
+
+    await triggerConditionMatchInteractions(activePageId, {
+        reason: "page-init",
+    });
+    pushRuntimeDebugEvent({
+        level: "info",
+        category: "page",
+        title: "页面运行态已初始化",
+        detail: `${project.value.pages.find((page) => page.id === activePageId)?.name ?? activePageId}${refreshDataSources ? " · 已同步数据与联动" : " · 已同步联动状态"}`,
+        pageId: activePageId,
+        pageName:
+            project.value.pages.find((page) => page.id === activePageId)?.name ??
+            "",
+    });
 }
 
 function formatClipboardValue(value) {
@@ -1310,6 +2200,7 @@ function clearSourceRuntime(sourceId, options = {}) {
     }
 
     resetSourceRuntime(source);
+    clearConditionMatchState();
 
     if (!options.silent) {
         statusMessage.value = `已清空数据源调试结果：${source.name}`;
@@ -1331,6 +2222,7 @@ function clearAllSourceRuntime(options = {}) {
         nextRuntime[source.id] = createSourceRuntimeEntry(source);
     });
     dataSourceRuntime.value = nextRuntime;
+    clearConditionMatchState();
 
     if (!options.silent) {
         statusMessage.value = `已清空 ${project.value.dataSources.length} 个数据源调试结果`;
@@ -1460,10 +2352,49 @@ async function copyRuntimeLink() {
         url.searchParams.set("page", pageId);
     }
 
-    await copyTextToClipboard(url.toString(), {
+    const copied = await copyTextToClipboard(url.toString(), {
         successMessage: "运行地址已复制到剪贴板",
         failureMessage: "运行地址复制失败，请手动复制浏览器地址",
     });
+
+    if (copied) {
+        pushRuntimeDebugEvent({
+            level: "info",
+            category: "runtime",
+            title: "已复制运行地址",
+            detail: pageId
+                ? `页面 ${currentPage.value?.name ?? pageId}`
+                : "当前项目运行入口",
+        });
+    }
+}
+
+function buildRuntimeDebugSnapshot() {
+    return {
+        exportedAt: new Date().toISOString(),
+        summary: runtimeDebugSummary.value,
+        filters: runtimeDebugFilters.value,
+        variables: runtimeDebugVariables.value,
+        sources: runtimeDebugSources.value,
+        events: runtimeDebugEvents.value,
+    };
+}
+
+async function copyRuntimeDebugSnapshot() {
+    const copied = await copyTextToClipboard(buildRuntimeDebugSnapshot(), {
+        successMessage: "运行态调试快照已复制到剪贴板",
+        failureMessage: "复制运行态调试快照失败，请稍后重试",
+        emptyMessage: "当前没有可复制的运行态调试快照",
+    });
+
+    if (copied) {
+        pushRuntimeDebugEvent({
+            level: "info",
+            category: "runtime",
+            title: "已复制调试快照",
+            detail: `${runtimeDebugEvents.value.length} 条事件，${runtimeDebugSources.value.length} 个数据源，${runtimeDebugVariables.value.length} 个变量`,
+        });
+    }
 }
 
 function clearLinkedWidgetState() {
@@ -1499,8 +2430,11 @@ function flashLinkedWidgets(widgetIds) {
 function enterRuntimeMode() {
     closeDialog();
     cancelInteractionRuns();
+    cancelInteractivePageInitialization();
+    clearConditionMatchState();
     previewMode.value = false;
     resetWidgetRuntimeState();
+    resetRuntimeVariables();
     resetRuntimeFilters();
     clearLinkedWidgetState();
     runtimePageId.value =
@@ -1509,14 +2443,23 @@ function enterRuntimeMode() {
         project.value.pages[0]?.id ||
         "";
     appMode.value = "runtime";
-    refreshAllDataSources({ silent: true });
     syncSourceRefreshTimers();
     statusMessage.value = "已进入运行页";
+    pushRuntimeDebugEvent({
+        level: "info",
+        category: "runtime",
+        title: "已进入运行页",
+        detail: currentPage.value?.name ?? runtimePageId.value,
+        force: true,
+    });
 }
 
 function exitRuntimeMode() {
     cancelInteractionRuns();
+    cancelInteractivePageInitialization();
+    clearConditionMatchState();
     resetWidgetRuntimeState();
+    resetRuntimeVariables();
     resetRuntimeFilters();
     const pageId = currentPageId.value;
 
@@ -1532,6 +2475,7 @@ function exitRuntimeMode() {
     );
     syncSourceRefreshTimers();
     statusMessage.value = "已返回编辑器";
+    clearRuntimeDebugEvents({ silent: true });
 }
 
 function createSource(type) {
@@ -1853,6 +2797,14 @@ function switchPage(pageId, options = {}) {
         runtimePageId.value = nextPage.id;
         clearLinkedWidgetState();
         statusMessage.value = `已切换页面：${nextPage.name}`;
+        pushRuntimeDebugEvent({
+            level: "info",
+            category: "page",
+            title: "运行页切换",
+            detail: nextPage.name,
+            pageId: nextPage.id,
+            pageName: nextPage.name,
+        });
         return;
     }
 
@@ -1870,6 +2822,17 @@ function switchPage(pageId, options = {}) {
     }
 
     statusMessage.value = `已切换页面：${nextPage.name}`;
+
+    if (previewMode.value || options.previewNavigation) {
+        pushRuntimeDebugEvent({
+            level: "info",
+            category: "page",
+            title: "预览页切换",
+            detail: nextPage.name,
+            pageId: nextPage.id,
+            pageName: nextPage.name,
+        });
+    }
 }
 
 function locateSourceUsage(usage) {
@@ -1907,6 +2870,51 @@ function locateSourceUsage(usage) {
     sanitizeSelection([targetWidget.id], targetWidget.id);
     flashLinkedWidgets([targetWidget.id]);
     statusMessage.value = `已定位到 ${targetPage.name} / ${targetWidget.name}`;
+}
+
+function locateInteractionNode(payload = {}) {
+    const targetPage = payload.pageId
+        ? project.value.pages.find((page) => page.id === payload.pageId)
+        : currentPage.value;
+
+    if (!targetPage) {
+        statusMessage.value = "目标页面不存在，可能已经被删除";
+        return;
+    }
+
+    const targetWidget = payload.widgetId
+        ? targetPage.widgets.find((widget) => widget.id === payload.widgetId) ??
+          null
+        : null;
+
+    if (payload.widgetId && !targetWidget) {
+        statusMessage.value = "目标组件不存在，可能已经被删除";
+        return;
+    }
+
+    if (isRuntimeMode.value) {
+        appMode.value = "editor";
+        runtimePageId.value = "";
+    }
+
+    if (previewMode.value) {
+        previewMode.value = false;
+    }
+
+    if (project.value.activePageId !== targetPage.id) {
+        project.value.activePageId = targetPage.id;
+        clearLinkedWidgetState();
+    }
+
+    if (targetWidget) {
+        sanitizeSelection([targetWidget.id], targetWidget.id);
+        flashLinkedWidgets([targetWidget.id]);
+        statusMessage.value = `已定位到交互节点：${targetPage.name} / ${targetWidget.name}`;
+        return;
+    }
+
+    sanitizeSelection([], null);
+    statusMessage.value = `已定位到交互页面：${targetPage.name}`;
 }
 
 function createPage() {
@@ -2521,7 +3529,10 @@ function applyProjectState(nextProject, options = {}) {
     runtimePageId.value = "";
     clipboardTemplate.value = null;
     cancelInteractionRuns();
+    clearConditionMatchState();
+    clearRuntimeDebugEvents({ silent: true });
     resetWidgetRuntimeState();
+    resetRuntimeVariables();
     clearLinkedWidgetState();
     syncDataSourceRuntime();
     syncSourceRefreshTimers();
@@ -2685,23 +3696,11 @@ function createBlankProjectRecord() {
 
 function togglePreviewMode() {
     previewMode.value = !previewMode.value;
-
-    if (previewMode.value) {
-        void nextTick(() => {
-            syncPageRuntimeFilters(currentPageId.value);
-            triggerPageEnterInteractions(currentPageId.value);
-        });
-    }
 }
 
 function openRuntimeWorkspace() {
     enterRuntimeMode();
-    void nextTick(() => {
-        syncPageRuntimeFilters(runtimePageId.value || currentPageId.value);
-        triggerPageEnterInteractions(
-            runtimePageId.value || currentPageId.value,
-        );
-    });
+    void initializeInteractivePage(runtimePageId.value || currentPageId.value);
 }
 
 function navigateToPage(pageId, options = {}) {
@@ -2723,9 +3722,12 @@ function navigateToPage(pageId, options = {}) {
             options.previewNavigation) &&
         changed
     ) {
+        cancelInteractivePageInitialization();
+        clearConditionMatchState();
         resetRuntimeFilters();
-        syncPageRuntimeFilters(activePageId);
-        void triggerPageEnterInteractions(activePageId);
+        void initializeInteractivePage(activePageId, {
+            refreshDataSources: false,
+        });
     }
 }
 
@@ -2781,7 +3783,10 @@ function resetProject() {
     previewMode.value = false;
     runtimePageId.value = "";
     clipboardTemplate.value = null;
+    clearConditionMatchState();
+    clearRuntimeDebugEvents({ silent: true });
     resetWidgetRuntimeState();
+    resetRuntimeVariables();
     clearLinkedWidgetState();
     selectDefaultWidget(currentPage.value);
     statusMessage.value = "已恢复示例项目";
@@ -2834,7 +3839,10 @@ function applyImport() {
         previewMode.value = false;
         runtimePageId.value = "";
         clipboardTemplate.value = null;
+        clearConditionMatchState();
+        clearRuntimeDebugEvents({ silent: true });
         resetWidgetRuntimeState();
+        resetRuntimeVariables();
         clearLinkedWidgetState();
         selectDefaultWidget(currentPage.value);
         statusMessage.value = "项目 JSON 已导入";
@@ -3035,9 +4043,16 @@ function pushUndoEntry(entry) {
 async function restoreHistoryEntry(entry) {
     isRestoringHistory.value = true;
     project.value = normalizeProjectSchema(JSON.parse(entry.snapshot));
+    cancelInteractionRuns();
+    cancelInteractivePageInitialization();
+    clearConditionMatchState();
+    resetWidgetRuntimeState();
+    resetRuntimeVariables();
+    resetRuntimeFilters();
     clearLinkedWidgetState();
     await nextTick();
     flushProjectSync();
+    syncSourceRefreshTimers();
 
     if (previewMode.value) {
         sanitizeSelection([], null);
@@ -3055,6 +4070,17 @@ async function restoreHistoryEntry(entry) {
     lastHistoryCommitAt.value = 0;
     lastHistoryCommitLabel.value = "";
     isRestoringHistory.value = false;
+
+    if (previewMode.value || isRuntimeMode.value) {
+        await initializeInteractivePage(
+            isRuntimeMode.value
+                ? runtimePageId.value || currentPageId.value
+                : currentPageId.value,
+            {
+                refreshDataSources: false,
+            },
+        );
+    }
 }
 
 async function undoProject() {
@@ -3123,6 +4149,12 @@ async function executeInteractionAction(widget, action) {
 
             if (targetIds.length) {
                 statusMessage.value = `已联动高亮 ${targetIds.length} 个组件`;
+                pushRuntimeDebugEvent({
+                    level: "success",
+                    category: "interaction",
+                    title: "联动高亮完成",
+                    detail: `${widget.name} · ${targetIds.length} 个目标组件`,
+                });
             }
 
             return targetIds.length > 0;
@@ -3144,6 +4176,12 @@ async function executeInteractionAction(widget, action) {
 
             if (refreshCount > 0) {
                 statusMessage.value = `已联动刷新 ${refreshCount} 个数据源`;
+                pushRuntimeDebugEvent({
+                    level: "success",
+                    category: "interaction",
+                    title: "联动刷新完成",
+                    detail: `${widget.name} · ${refreshCount} 个数据源`,
+                });
             }
 
             return refreshCount > 0;
@@ -3152,6 +4190,17 @@ async function executeInteractionAction(widget, action) {
             if (action.targetPageId) {
                 navigateToPage(action.targetPageId, {
                     previewNavigation: true,
+                });
+                pushRuntimeDebugEvent({
+                    level: "info",
+                    category: "interaction",
+                    title: "联动触发切页",
+                    detail: `${widget.name} · ${project.value.pages.find((page) => page.id === action.targetPageId)?.name ?? action.targetPageId}`,
+                    pageId: action.targetPageId,
+                    pageName:
+                        project.value.pages.find(
+                            (page) => page.id === action.targetPageId,
+                        )?.name ?? "",
                 });
                 return true;
             }
@@ -3164,6 +4213,12 @@ async function executeInteractionAction(widget, action) {
 
             if (visibleCount > 0) {
                 statusMessage.value = `已显示 ${visibleCount} 个组件`;
+                pushRuntimeDebugEvent({
+                    level: "success",
+                    category: "interaction",
+                    title: "联动显示组件",
+                    detail: `${widget.name} · ${visibleCount} 个目标组件`,
+                });
             }
 
             return visibleCount > 0;
@@ -3176,6 +4231,12 @@ async function executeInteractionAction(widget, action) {
 
             if (hiddenCount > 0) {
                 statusMessage.value = `已隐藏 ${hiddenCount} 个组件`;
+                pushRuntimeDebugEvent({
+                    level: "warning",
+                    category: "interaction",
+                    title: "联动隐藏组件",
+                    detail: `${widget.name} · ${hiddenCount} 个目标组件`,
+                });
             }
 
             return hiddenCount > 0;
@@ -3187,9 +4248,93 @@ async function executeInteractionAction(widget, action) {
 
             if (toggledCount > 0) {
                 statusMessage.value = `已切换 ${toggledCount} 个组件的显隐状态`;
+                pushRuntimeDebugEvent({
+                    level: "info",
+                    category: "interaction",
+                    title: "联动切换显隐",
+                    detail: `${widget.name} · ${toggledCount} 个目标组件`,
+                });
             }
 
             return toggledCount > 0;
+        }
+        case "patch-widget-props": {
+            const targetIds = Array.from(
+                new Set((action.targetWidgetIds ?? []).filter(Boolean)),
+            );
+
+            if (!targetIds.length) {
+                return false;
+            }
+
+            const patchResult = parseInteractionPropsPatch(
+                action.targetPropsPatch,
+                getInteractionTemplateScope(widget),
+            );
+
+            if (!patchResult.ok) {
+                statusMessage.value = patchResult.error;
+                pushRuntimeDebugEvent({
+                    level: "error",
+                    category: "interaction",
+                    title: "组件属性更新失败",
+                    detail: `${widget.name} · ${patchResult.error}`,
+                });
+                return false;
+            }
+
+            targetIds.forEach((widgetId) => {
+                setRuntimeWidgetPropsPatch(widgetId, patchResult.value);
+            });
+
+            if (shouldSyncRuntimeFilterState(targetIds)) {
+                syncRuntimeFiltersToWidgets();
+            }
+
+            await triggerConditionMatchInteractions(getActiveInteractivePageId(), {
+                reason: "widget-props-patch",
+            });
+            statusMessage.value = `已更新 ${targetIds.length} 个组件属性`;
+            pushRuntimeDebugEvent({
+                level: "success",
+                category: "interaction",
+                title: "联动更新组件属性",
+                detail: `${widget.name} · ${targetIds.length} 个目标组件 · ${formatRuntimeDebugValue(patchResult.value, 88)}`,
+            });
+            return true;
+        }
+        case "set-runtime-variable": {
+            const variableKey = String(action.targetVariableKey ?? "").trim();
+
+            if (!variableKey) {
+                return false;
+            }
+
+            const resolvedValue = resolveInteractionTemplateString(
+                action.targetVariableValue,
+                getInteractionTemplateScope(widget),
+            );
+            const nextValue =
+                typeof resolvedValue === "string"
+                    ? normalizeConditionOperand(resolvedValue)
+                    : resolvedValue;
+            const updated = setRuntimeVariable(variableKey, nextValue);
+
+            if (!updated) {
+                return false;
+            }
+
+            await triggerConditionMatchInteractions(getActiveInteractivePageId(), {
+                reason: "runtime-variable-set",
+            });
+            statusMessage.value = `已设置运行时变量 ${variableKey}`;
+            pushRuntimeDebugEvent({
+                level: "success",
+                category: "interaction",
+                title: "运行时变量已更新",
+                detail: `${widget.name} · ${variableKey} = ${formatRuntimeDebugValue(nextValue, 88)}`,
+            });
+            return true;
         }
         default:
             return false;
@@ -3197,9 +4342,11 @@ async function executeInteractionAction(widget, action) {
 }
 
 async function runWidgetActions(widget, options = {}) {
-    const actions = getInteractionActions(widget.interaction).filter(
-        (action) => action.action !== "none",
-    );
+    const actions = Array.isArray(options.actions)
+        ? options.actions.filter((action) => action.action !== "none")
+        : getInteractionActions(widget.interaction).filter(
+              (action) => action.action !== "none",
+          );
 
     if (!actions.length) {
         return;
@@ -3215,6 +4362,17 @@ async function runWidgetActions(widget, options = {}) {
 
         if (!canContinue) {
             return;
+        }
+
+        if (!options.skipConditionEvaluation) {
+            const conditionResult = evaluateInteractionActionCondition(
+                widget,
+                action,
+            );
+
+            if (!conditionResult.matched) {
+                continue;
+            }
         }
 
         await executeInteractionAction(widget, action);
@@ -3248,6 +4406,98 @@ async function triggerPageEnterInteractions(pageId = currentPageId.value) {
     }
 }
 
+async function triggerConditionMatchInteractions(
+    pageId = currentPageId.value,
+    options = {},
+) {
+    if (!previewMode.value && !isRuntimeMode.value) {
+        return;
+    }
+
+    const page = project.value.pages.find((item) => item.id === pageId);
+
+    if (!page) {
+        return;
+    }
+
+    const widgets = page.widgets.filter((widget) => {
+        if ((widget.interaction?.trigger || "click") !== "condition-match") {
+            return false;
+        }
+
+        if (!options.sourceId) {
+            return true;
+        }
+
+        return widget.dataBinding?.sourceId === options.sourceId;
+    });
+
+    if (!widgets.length) {
+        return;
+    }
+
+    const token = options.token ?? interactionRunToken;
+
+    for (const widget of widgets) {
+        const matchedActions = [];
+
+        getInteractionActions(widget.interaction)
+            .filter((action) => action.action !== "none")
+            .forEach((action) => {
+                const stateKey = getConditionMatchStateKey(
+                    page.id,
+                    widget.id,
+                    action.id,
+                );
+
+                if (!hasConfiguredInteractionCondition(action)) {
+                    conditionMatchState.set(stateKey, false);
+                    return;
+                }
+
+                const conditionResult = evaluateInteractionActionCondition(
+                    widget,
+                    action,
+                );
+                const wasMatched = conditionMatchState.get(stateKey) === true;
+
+                conditionMatchState.set(stateKey, conditionResult.matched);
+
+                if (conditionResult.matched && !wasMatched) {
+                    matchedActions.push(action);
+                }
+            });
+
+        if (!matchedActions.length) {
+            continue;
+        }
+
+        pushRuntimeDebugEvent({
+            level: "success",
+            category: "condition",
+            title: "条件命中，已触发动作",
+            detail: `${widget.name} · ${matchedActions
+                .map((action) =>
+                    [
+                        getInteractionActionLabel(action.action),
+                        formatInteractionConditionSummary(action),
+                    ]
+                        .filter(Boolean)
+                        .join(" / "),
+                )
+                .join("、")}`,
+            pageId: page.id,
+            pageName: page.name,
+        });
+
+        await runWidgetActions(widget, {
+            token,
+            actions: matchedActions,
+            skipConditionEvaluation: true,
+        });
+    }
+}
+
 async function handleWidgetAction(widgetId) {
     if (!previewMode.value && !isRuntimeMode.value) {
         return;
@@ -3260,6 +4510,12 @@ async function handleWidgetAction(widgetId) {
     }
 
     cancelInteractionRuns();
+    pushRuntimeDebugEvent({
+        level: "info",
+        category: "interaction",
+        title: "触发组件动作",
+        detail: widget.name,
+    });
     await runWidgetActions(widget, {
         token: interactionRunToken,
     });
@@ -3288,6 +4544,12 @@ function handleWidgetCommand(payload = {}) {
         statusMessage.value = nextValue
             ? `Filter applied: ${runtimeWidget.props?.title || runtimeWidget.name} / ${nextLabel || nextValue}`
             : `Filter cleared: ${runtimeWidget.props?.title || runtimeWidget.name}`;
+        pushRuntimeDebugEvent({
+            level: nextValue ? "success" : "info",
+            category: "filter",
+            title: nextValue ? "筛选条件已应用" : "筛选条件已清空",
+            detail: `${runtimeWidget.props?.title || runtimeWidget.name} · ${nextLabel || nextValue || "全部"}`,
+        });
         return;
     }
 
@@ -3302,6 +4564,12 @@ function handleWidgetCommand(payload = {}) {
         statusMessage.value = nextValue
             ? `Map focus: ${runtimeWidget.props?.title || runtimeWidget.name} / ${nextValue}`
             : `Map focus cleared: ${runtimeWidget.props?.title || runtimeWidget.name}`;
+        pushRuntimeDebugEvent({
+            level: nextValue ? "success" : "info",
+            category: "filter",
+            title: nextValue ? "地图区域已选中" : "地图区域已清空",
+            detail: `${runtimeWidget.props?.title || runtimeWidget.name} · ${nextLabel || nextValue || "全部"}`,
+        });
         return;
     }
 
@@ -3318,6 +4586,12 @@ function handleWidgetCommand(payload = {}) {
         statusMessage.value = nextValue
             ? `Chart filter: ${runtimeWidget.props?.title || runtimeWidget.name} / ${nextLabel || nextValue}`
             : `Chart filter cleared: ${runtimeWidget.props?.title || runtimeWidget.name}`;
+        pushRuntimeDebugEvent({
+            level: nextValue ? "success" : "info",
+            category: "filter",
+            title: nextValue ? "图表筛选已选中" : "图表筛选已清空",
+            detail: `${runtimeWidget.props?.title || runtimeWidget.name} · ${nextLabel || nextValue || "全部"}`,
+        });
     }
 }
 
@@ -3489,14 +4763,17 @@ watch(previewMode, (enabled) => {
     }
 
     cancelInteractionRuns();
+    cancelInteractivePageInitialization();
+    clearConditionMatchState();
     resetWidgetRuntimeState();
+    resetRuntimeVariables();
     resetRuntimeFilters();
     clearLinkedWidgetState();
     syncSourceRefreshTimers();
 
     if (enabled) {
         sanitizeSelection([], null);
-        refreshAllDataSources({ silent: true });
+        void initializeInteractivePage(currentPageId.value);
         statusMessage.value = "已进入预览模式";
     } else {
         selectDefaultWidget(currentPage.value);
@@ -3507,10 +4784,12 @@ watch(previewMode, (enabled) => {
 onMounted(() => {
     if (isRuntimeMode.value) {
         runtimePageId.value = currentPageId.value;
+        clearConditionMatchState();
         resetWidgetRuntimeState();
-        refreshAllDataSources({ silent: true });
+        resetRuntimeVariables();
+        resetRuntimeFilters();
         syncSourceRefreshTimers();
-        void nextTick(() => triggerPageEnterInteractions(runtimePageId.value));
+        void initializeInteractivePage(runtimePageId.value);
     }
 
     window.addEventListener("keydown", handleKeydown);
@@ -3518,6 +4797,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
     cancelInteractionRuns();
+    cancelInteractivePageInitialization();
+    clearConditionMatchState();
     flushProjectSync();
     window.removeEventListener("keydown", handleKeydown);
     clearSourceRefreshTimers();
@@ -3576,9 +4857,16 @@ onBeforeUnmount(() => {
             :linked-widget-ids="linkedWidgetIds"
             :data-source-runtime="dataSourceRuntime"
             :runtime-filters="runtimeFilters"
+            :debug-summary="runtimeDebugSummary"
+            :debug-filters="runtimeDebugFilters"
+            :debug-variables="runtimeDebugVariables"
+            :debug-sources="runtimeDebugSources"
+            :debug-events="runtimeDebugEvents"
             @select-page="navigateToPage"
             @exit-runtime="exitRuntimeMode"
             @copy-runtime-link="copyRuntimeLink"
+            @copy-debug-snapshot="copyRuntimeDebugSnapshot"
+            @clear-debug-events="clearRuntimeDebugEvents"
             @trigger-widget-action="handleWidgetAction"
             @widget-command="handleWidgetCommand"
         />
@@ -3662,6 +4950,7 @@ onBeforeUnmount(() => {
                 @change-source-type="changeSourceType"
                 @update-source-payload="updateSourcePayload"
                 @copy-source-debug="copySourceDebug"
+                @locate-interaction-node="locateInteractionNode"
                 @undo="undoProject"
                 @redo="redoProject"
             />

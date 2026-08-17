@@ -21,7 +21,34 @@ const createPageId = () =>
 const createInteractionActionId = () =>
     globalThis.crypto?.randomUUID?.() ??
     `interaction-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-const interactionTriggers = ["click", "double-click", "hover", "page-enter"];
+const createInteractionConditionRuleId = () =>
+    globalThis.crypto?.randomUUID?.() ??
+    `condition-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const interactionTriggers = [
+    "click",
+    "double-click",
+    "hover",
+    "page-enter",
+    "condition-match",
+];
+const interactionConditionSources = [
+    "widget-props",
+    "source-payload",
+    "runtime-variables",
+];
+const interactionConditionLogics = ["all", "any"];
+const interactionConditionOperators = [
+    "truthy",
+    "falsy",
+    "exists",
+    "eq",
+    "neq",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "includes",
+];
 
 const toFiniteNumber = (value, fallback) => {
     const nextValue = Number(value);
@@ -103,6 +130,57 @@ function normalizeDataBinding(binding) {
     };
 }
 
+function normalizeInteractionConditionRule(rule) {
+    return {
+        id:
+            typeof rule?.id === "string" && rule.id
+                ? rule.id
+                : createInteractionConditionRuleId(),
+        source: interactionConditionSources.includes(rule?.source)
+            ? rule.source
+            : "widget-props",
+        field: typeof rule?.field === "string" ? rule.field.trim() : "",
+        operator: interactionConditionOperators.includes(rule?.operator)
+            ? rule.operator
+            : "truthy",
+        value: rule?.value == null ? "" : String(rule.value),
+    };
+}
+
+function hasLegacyInteractionConditionRule(condition) {
+    return Boolean(
+        condition &&
+            typeof condition === "object" &&
+            !Array.isArray(condition) &&
+            ("source" in condition ||
+                "field" in condition ||
+                "operator" in condition ||
+                "value" in condition),
+    );
+}
+
+function normalizeInteractionCondition(condition) {
+    const rules = Array.isArray(condition?.rules)
+        ? condition.rules.map((rule) => normalizeInteractionConditionRule(rule))
+        : hasLegacyInteractionConditionRule(condition)
+          ? [normalizeInteractionConditionRule(condition)]
+          : [];
+    const enabled = Boolean(condition?.enabled);
+
+    return {
+        enabled,
+        logic: interactionConditionLogics.includes(condition?.logic)
+            ? condition.logic
+            : "all",
+        rules:
+            rules.length > 0
+                ? rules
+                : enabled
+                  ? [normalizeInteractionConditionRule()]
+                  : [],
+    };
+}
+
 function normalizeInteractionAction(action) {
     return {
         id:
@@ -118,7 +196,20 @@ function normalizeInteractionAction(action) {
             : [],
         targetPageId:
             typeof action?.targetPageId === "string" ? action.targetPageId : "",
+        targetPropsPatch:
+            typeof action?.targetPropsPatch === "string"
+                ? action.targetPropsPatch
+                : "{}",
+        targetVariableKey:
+            typeof action?.targetVariableKey === "string"
+                ? action.targetVariableKey.trim()
+                : "",
+        targetVariableValue:
+            action?.targetVariableValue == null
+                ? ""
+                : String(action.targetVariableValue),
         delay: Math.max(0, toFiniteNumber(action?.delay, 0)),
+        condition: normalizeInteractionCondition(action?.condition),
     };
 }
 
@@ -160,6 +251,10 @@ export function createInteractionAction(action = "none", overrides = {}) {
         action,
         ...overrides,
     });
+}
+
+export function createInteractionConditionRule(overrides = {}) {
+    return normalizeInteractionConditionRule(overrides);
 }
 
 export function getInteractionActions(interaction) {

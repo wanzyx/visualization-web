@@ -15,6 +15,7 @@ import {
 } from "../editor/inspectorSchemas";
 import {
     createInteractionAction,
+    createInteractionConditionRule,
     getInteractionActions,
 } from "../editor/project";
 import {
@@ -93,11 +94,12 @@ const props = defineProps({
     },
 });
 
-defineEmits([
+const emit = defineEmits([
     "select-layer",
     "toggle-layer-hidden",
     "toggle-layer-locked",
     "reorder-layer",
+    "locate-interaction-node",
     "set-selected-hidden",
     "set-selected-locked",
     "align-selected",
@@ -133,18 +135,67 @@ const interactionTriggerOptions = [
     { value: "double-click", label: "双击" },
     { value: "hover", label: "悬停" },
     { value: "page-enter", label: "页面进入" },
+    { value: "condition-match", label: "条件命中" },
 ];
+const interactionTriggerLabelMap = Object.fromEntries(
+    interactionTriggerOptions.map((option) => [option.value, option.label]),
+);
+const interactionConditionSourceOptions = [
+    { value: "widget-props", label: "当前组件运行值" },
+    { value: "source-payload", label: "绑定数据源 payload" },
+    { value: "runtime-variables", label: "运行时变量" },
+];
+const interactionConditionLogicOptions = [
+    { value: "all", label: "满足全部" },
+    { value: "any", label: "满足任一" },
+];
+const interactionConditionOperatorOptions = [
+    { value: "truthy", label: "有值/为真" },
+    { value: "falsy", label: "为空/为假" },
+    { value: "exists", label: "字段存在" },
+    { value: "eq", label: "等于" },
+    { value: "neq", label: "不等于" },
+    { value: "gt", label: "大于" },
+    { value: "gte", label: "大于等于" },
+    { value: "lt", label: "小于" },
+    { value: "lte", label: "小于等于" },
+    { value: "includes", label: "包含" },
+];
+const interactionConditionSourceLabelMap = Object.fromEntries(
+    interactionConditionSourceOptions.map((option) => [option.value, option.label]),
+);
+const interactionConditionLogicLabelMap = Object.fromEntries(
+    interactionConditionLogicOptions.map((option) => [option.value, option.label]),
+);
+const interactionConditionOperatorLabelMap = Object.fromEntries(
+    interactionConditionOperatorOptions.map((option) => [option.value, option.label]),
+);
 const widgetTargetActionTypes = [
     "highlight-widgets",
     "show-widgets",
     "hide-widgets",
     "toggle-widgets-visibility",
+    "patch-widget-props",
 ];
 const visibilityTargetActionTypes = [
     "show-widgets",
     "hide-widgets",
     "toggle-widgets-visibility",
 ];
+const pageWidgetTargetActionTypes = [
+    ...visibilityTargetActionTypes,
+    "patch-widget-props",
+];
+const interactionConditionValueOperators = new Set([
+    "eq",
+    "neq",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "includes",
+]);
+const interactionFlowScope = ref("current-page");
 
 const commonGroupId = computed(() => {
     if (props.selectedWidgets.length < 2) {
@@ -211,6 +262,34 @@ const showFilterTargetSection = computed(() =>
 
 const availableTargetPages = computed(() =>
     props.pages.filter((item) => item.id !== props.currentPageId),
+);
+
+const projectWidgetNodes = computed(() =>
+    props.pages.flatMap((page) =>
+        page.widgets.map((widget, index) => ({
+            id: widget.id,
+            name: widget.name,
+            widget,
+            pageId: page.id,
+            pageName: page.name,
+            widgetIndex: index,
+        })),
+    ),
+);
+
+const projectWidgetNodeMap = computed(
+    () => new Map(projectWidgetNodes.value.map((node) => [node.id, node])),
+);
+
+const projectPageMap = computed(
+    () => new Map(props.pages.map((page) => [page.id, page])),
+);
+
+const projectSourceMap = computed(
+    () =>
+        new Map(
+            (props.project.dataSources ?? []).map((source) => [source.id, source]),
+        ),
 );
 
 const panelTitle = computed(() => {
@@ -789,6 +868,154 @@ const interactionActions = computed(
 const selectedInteractionAction = computed(
     () => interactionActions.value[activeInteractionIndex.value] ?? null,
 );
+const interactionFlowHint = computed(() => {
+    switch (props.selectedWidget?.interaction?.trigger) {
+        case "double-click":
+            return "双击当前组件后，会从上到下依次执行这里配置的动作。";
+        case "hover":
+            return "鼠标移入当前组件后，会从上到下依次执行这里配置的动作。";
+        case "page-enter":
+            return "进入当前页面后，会自动按顺序执行这里配置的动作。";
+        case "condition-match":
+            return "当前组件的条件命中后，会自动按顺序执行这里配置的动作。";
+        default:
+            return "点击当前组件后，会从上到下依次执行这里配置的动作。";
+    }
+});
+
+const interactionFlowEntries = computed(() =>
+    props.pages.flatMap((page, pageIndex) =>
+        page.widgets.flatMap((widget, widgetIndex) =>
+            getInteractionActions(widget.interaction)
+                .filter((action) => action.action !== "none")
+                .map((action, actionIndex) => {
+                    const trigger = widget.interaction?.trigger || "click";
+
+                    return {
+                        id: action.id || `${page.id}-${widget.id}-${actionIndex}`,
+                        pageId: page.id,
+                        pageName: page.name,
+                        pageIndex,
+                        widgetIndex,
+                        actionIndex,
+                        sourceWidgetId: widget.id,
+                        sourceWidgetName: widget.name,
+                        trigger,
+                        triggerLabel:
+                            interactionTriggerLabelMap[trigger] ?? "点击",
+                        actionType: action.action,
+                        actionLabel: getInteractionActionLabel(action.action),
+                        delay: action.delay ?? 0,
+                        delayLabel: getInteractionDelayLabel(action),
+                        conditionEnabled: hasInteractionCondition(action),
+                        conditionSummary: getInteractionConditionSummary(action),
+                        targetPropsPatch:
+                            typeof action.targetPropsPatch === "string"
+                                ? action.targetPropsPatch
+                                : "{}",
+                        targetVariableKey:
+                            typeof action.targetVariableKey === "string"
+                                ? action.targetVariableKey
+                                : "",
+                        targetVariableValue:
+                            action.targetVariableValue == null
+                                ? ""
+                                : String(action.targetVariableValue),
+                        targetWidgets: (action.targetWidgetIds ?? []).map(
+                            (targetId) => {
+                                const target =
+                                    projectWidgetNodeMap.value.get(targetId);
+
+                                return target
+                                    ? {
+                                          id: target.id,
+                                          name: target.name,
+                                          pageId: target.pageId,
+                                          pageName: target.pageName,
+                                          missing: false,
+                                      }
+                                    : {
+                                          id: targetId,
+                                          name: "目标组件已失效",
+                                          pageId: "",
+                                          pageName: "",
+                                          missing: true,
+                                      };
+                            },
+                        ),
+                        targetSources: (action.targetSourceIds ?? []).map(
+                            (sourceId) => {
+                                const source = projectSourceMap.value.get(sourceId);
+
+                                return source
+                                    ? {
+                                          id: source.id,
+                                          name: source.name,
+                                          missing: false,
+                                      }
+                                    : {
+                                          id: sourceId,
+                                          name: "目标数据源已失效",
+                                          missing: true,
+                                      };
+                            },
+                        ),
+                        targetPage: action.targetPageId
+                            ? projectPageMap.value.get(action.targetPageId)
+                                ? {
+                                      id: action.targetPageId,
+                                      name:
+                                          projectPageMap.value.get(
+                                              action.targetPageId,
+                                          )?.name ?? "目标页面",
+                                      missing: false,
+                                  }
+                                : {
+                                      id: action.targetPageId,
+                                      name: "目标页面已失效",
+                                      missing: true,
+                                  }
+                            : null,
+                    };
+                }),
+        ),
+    ),
+);
+
+const visibleInteractionFlowEntries = computed(() =>
+    interactionFlowScope.value === "all-pages"
+        ? interactionFlowEntries.value
+        : interactionFlowEntries.value.filter(
+              (entry) => entry.pageId === props.currentPageId,
+          ),
+);
+
+const interactionConfiguredWidgetCount = computed(
+    () => new Set(interactionFlowEntries.value.map((entry) => entry.sourceWidgetId)).size,
+);
+
+const selectedWidgetOutgoingEntries = computed(() => {
+    if (!props.selectedWidget) {
+        return [];
+    }
+
+    return interactionFlowEntries.value.filter(
+        (entry) => entry.sourceWidgetId === props.selectedWidget.id,
+    );
+});
+
+const selectedWidgetIncomingEntries = computed(() => {
+    if (!props.selectedWidget) {
+        return [];
+    }
+
+    return interactionFlowEntries.value.filter((entry) =>
+        entry.targetWidgets.some(
+            (target) =>
+                !target.missing && target.id === props.selectedWidget?.id,
+        ),
+    );
+});
 
 function ensureInteraction() {
     if (!props.selectedWidget) {
@@ -927,10 +1154,150 @@ function updateInteractionActionType(action, value) {
     if (value !== "switch-page") {
         action.targetPageId = "";
     }
+
+    if (value !== "patch-widget-props") {
+        action.targetPropsPatch = "{}";
+    } else if (
+        typeof action.targetPropsPatch !== "string" ||
+        !action.targetPropsPatch.trim()
+    ) {
+        action.targetPropsPatch = "{\n  \"value\": \"\"\n}";
+    }
+
+    if (value !== "set-runtime-variable") {
+        action.targetVariableKey = "";
+        action.targetVariableValue = "";
+    }
 }
 
 function updateInteractionActionDelay(action, value) {
     action.delay = Math.max(0, Number(value) || 0);
+}
+
+function isLegacyInteractionConditionShape(condition) {
+    return Boolean(
+        condition &&
+            typeof condition === "object" &&
+            !Array.isArray(condition) &&
+            ("source" in condition ||
+                "field" in condition ||
+                "operator" in condition ||
+                "value" in condition),
+    );
+}
+
+function ensureInteractionCondition(action) {
+    if (!action) {
+        return;
+    }
+
+    if (
+        !action.condition ||
+        typeof action.condition !== "object" ||
+        Array.isArray(action.condition)
+    ) {
+        action.condition = {
+            enabled: false,
+            logic: "all",
+            rules: [],
+        };
+    }
+
+    const legacyRule = isLegacyInteractionConditionShape(action.condition)
+        ? createInteractionConditionRule(action.condition)
+        : null;
+
+    action.condition.enabled = Boolean(action.condition.enabled);
+    action.condition.logic =
+        interactionConditionLogicLabelMap[action.condition.logic]
+            ? action.condition.logic
+            : "all";
+    action.condition.rules = Array.isArray(action.condition.rules)
+        ? action.condition.rules.map((rule) => createInteractionConditionRule(rule))
+        : legacyRule
+          ? [legacyRule]
+          : [];
+
+    if (action.condition.enabled && !action.condition.rules.length) {
+        action.condition.rules = [createInteractionConditionRule()];
+    }
+}
+
+function hasInteractionCondition(action) {
+    ensureInteractionCondition(action);
+    return Boolean(action?.condition?.enabled);
+}
+
+function doesInteractionConditionUseValue(operator) {
+    return interactionConditionValueOperators.has(operator);
+}
+
+function getInteractionConditionRules(action) {
+    ensureInteractionCondition(action);
+    return Array.isArray(action?.condition?.rules) ? action.condition.rules : [];
+}
+
+function setInteractionConditionEnabled(action, enabled) {
+    ensureInteractionCondition(action);
+    action.condition.enabled = Boolean(enabled);
+
+    if (action.condition.enabled && !action.condition.rules.length) {
+        action.condition.rules = [createInteractionConditionRule()];
+    }
+}
+
+function addInteractionConditionRule(action) {
+    ensureInteractionCondition(action);
+    action.condition.rules = [
+        ...getInteractionConditionRules(action),
+        createInteractionConditionRule(),
+    ];
+}
+
+function removeInteractionConditionRule(action, ruleIndex) {
+    const rules = getInteractionConditionRules(action);
+
+    if (rules.length <= 1) {
+        return;
+    }
+
+    action.condition.rules = rules.filter((_, index) => index !== ruleIndex);
+}
+
+function getInteractionConditionRuleSummary(rule) {
+    const sourceLabel =
+        interactionConditionSourceLabelMap[rule?.source] ?? "当前组件运行值";
+    const fieldLabel =
+        typeof rule?.field === "string" && rule.field.trim().length
+            ? rule.field.trim()
+            : "(整体值)";
+    const operatorLabel =
+        interactionConditionOperatorLabelMap[rule?.operator] ?? "命中";
+
+    if (!doesInteractionConditionUseValue(rule?.operator)) {
+        return `${sourceLabel} · ${fieldLabel} ${operatorLabel}`;
+    }
+
+    return `${sourceLabel} · ${fieldLabel} ${operatorLabel} ${rule?.value ?? ""}`;
+}
+
+function getInteractionConditionSummary(action) {
+    if (!hasInteractionCondition(action)) {
+        return "未启用条件判断";
+    }
+
+    const rules = getInteractionConditionRules(action);
+
+    if (!rules.length) {
+        return "已启用，但尚未配置条件";
+    }
+
+    const joiner = action.condition.logic === "any" ? " 或 " : " 且 ";
+    const summary = rules.map((rule) => getInteractionConditionRuleSummary(rule));
+
+    return summary.length > 1
+        ? `${interactionConditionLogicLabelMap[action.condition.logic] ?? "满足全部"}：${summary.join(joiner)}`
+        : summary[0];
 }
 
 function getInteractionActionLabel(actionType) {
@@ -946,51 +1313,128 @@ function usesVisibilityTargets(actionType) {
 }
 
 function getTargetWidgets(actionType) {
-    return usesVisibilityTargets(actionType)
+    return pageWidgetTargetActionTypes.includes(actionType)
         ? props.project.widgets
         : otherWidgets.value;
 }
 
 function getTargetWidgetEmptyText(actionType) {
+    if (actionType === "patch-widget-props") {
+        return "当前页面还没有可编排状态的组件。";
+    }
+
     return usesVisibilityTargets(actionType)
         ? "当前页面还没有可配置显隐的组件。"
         : "当前页面没有可联动的其他组件。";
 }
 
+function getInteractionPropsPatchPreview(action) {
+    const preview = String(action?.targetPropsPatch ?? "").trim() || "{}";
+    return preview.length > 44 ? `${preview.slice(0, 43)}…` : preview;
+}
+
+function getInteractionVariablePreview(action) {
+    const key = String(action?.targetVariableKey ?? "").trim();
+    const value = String(action?.targetVariableValue ?? "").trim();
+
+    if (!key) {
+        return "未填写变量名";
+    }
+
+    return value ? `${key} = ${value}` : `${key} = ""`;
+}
+
 function getInteractionActionSummary(action) {
+    const conditionSuffix = hasInteractionCondition(action)
+        ? ` · 条件：${getInteractionConditionSummary(action)}`
+        : "";
+
     switch (action.action) {
         case "highlight-widgets":
             return action.targetWidgetIds?.length
-                ? `高亮 ${action.targetWidgetIds.length} 个组件`
-                : "未选择目标组件";
+                ? `高亮 ${action.targetWidgetIds.length} 个组件${conditionSuffix}`
+                : `未选择目标组件${conditionSuffix}`;
         case "show-widgets":
             return action.targetWidgetIds?.length
-                ? `显示 ${action.targetWidgetIds.length} 个组件`
-                : "未选择目标组件";
+                ? `显示 ${action.targetWidgetIds.length} 个组件${conditionSuffix}`
+                : `未选择目标组件${conditionSuffix}`;
         case "hide-widgets":
             return action.targetWidgetIds?.length
-                ? `隐藏 ${action.targetWidgetIds.length} 个组件`
-                : "未选择目标组件";
+                ? `隐藏 ${action.targetWidgetIds.length} 个组件${conditionSuffix}`
+                : `未选择目标组件${conditionSuffix}`;
         case "toggle-widgets-visibility":
             return action.targetWidgetIds?.length
-                ? `切换 ${action.targetWidgetIds.length} 个组件显隐`
-                : "未选择目标组件";
+                ? `切换 ${action.targetWidgetIds.length} 个组件显隐${conditionSuffix}`
+                : `未选择目标组件${conditionSuffix}`;
         case "refresh-sources":
             return action.targetSourceIds?.length
-                ? `${action.targetSourceIds.length} 个数据源`
-                : "未选择目标数据源";
+                ? `${action.targetSourceIds.length} 个数据源${conditionSuffix}`
+                : `未选择目标数据源${conditionSuffix}`;
         case "switch-page":
             return action.targetPageId
                 ? (props.pages.find((page) => page.id === action.targetPageId)
-                      ?.name ?? "已选择目标页面")
-                : "未选择目标页面";
+                      ?.name ?? "已选择目标页面") + conditionSuffix
+                : `未选择目标页面${conditionSuffix}`;
+        case "patch-widget-props":
+            return action.targetWidgetIds?.length
+                ? `更新 ${action.targetWidgetIds.length} 个组件属性 · ${getInteractionPropsPatchPreview(action)}${conditionSuffix}`
+                : `未选择目标组件${conditionSuffix}`;
+        case "set-runtime-variable":
+            return `${getInteractionVariablePreview(action)}${conditionSuffix}`;
         default:
-            return "请选择动作类型";
+            return hasInteractionCondition(action)
+                ? `请选择动作类型 · 条件：${getInteractionConditionSummary(action)}`
+                : "请选择动作类型";
     }
 }
 
 function getInteractionDelayLabel(action) {
     return action.delay > 0 ? `延时 ${action.delay} ms` : "立即执行";
+}
+
+function getInteractionEntryTargetSummary(entry) {
+    switch (entry.actionType) {
+        case "highlight-widgets":
+            return entry.targetWidgets.length
+                ? `高亮 ${entry.targetWidgets.map((item) => item.name).join("、")}`
+                : "未配置高亮目标";
+        case "show-widgets":
+            return entry.targetWidgets.length
+                ? `显示 ${entry.targetWidgets.map((item) => item.name).join("、")}`
+                : "未配置显示目标";
+        case "hide-widgets":
+            return entry.targetWidgets.length
+                ? `隐藏 ${entry.targetWidgets.map((item) => item.name).join("、")}`
+                : "未配置隐藏目标";
+        case "toggle-widgets-visibility":
+            return entry.targetWidgets.length
+                ? `切换 ${entry.targetWidgets.map((item) => item.name).join("、")} 的显隐`
+                : "未配置显隐目标";
+        case "refresh-sources":
+            return entry.targetSources.length
+                ? `刷新 ${entry.targetSources.map((item) => item.name).join("、")}`
+                : "未配置数据源目标";
+        case "switch-page":
+            return entry.targetPage
+                ? `切换到 ${entry.targetPage.name}`
+                : "未配置目标页面";
+        case "patch-widget-props":
+            return entry.targetWidgets.length
+                ? `更新 ${entry.targetWidgets.map((item) => item.name).join("、")} · ${getInteractionPropsPatchPreview(entry)}`
+                : "未配置属性更新目标";
+        case "set-runtime-variable":
+            return getInteractionVariablePreview(entry);
+        default:
+            return "请先配置动作目标";
+    }
+}
+
+function locateInteractionNode(payload = {}) {
+    if (!payload.pageId && !payload.widgetId) {
+        return;
+    }
+
+    emit("locate-interaction-node", payload);
 }
 
 function toggleTargetWidget(
@@ -1320,7 +1764,7 @@ function isFilterTargetWidgetSelected(widgetId) {
             >
                 <div class="interaction-flow__toolbar">
                     <p class="inspector-tip">
-                        点击当前组件后，会从上到下依次执行这里配置的动作。
+                        {{ interactionFlowHint }}
                     </p>
                     <button
                         class="ghost inspector-inline-button"
@@ -1540,8 +1984,258 @@ function isFilterTargetWidgetSelected(widgetId) {
                                 </div>
                             </template>
 
+                            <template
+                                v-else-if="
+                                    action.action === 'set-runtime-variable'
+                                "
+                            >
+                                <div class="inspector-grid">
+                                    <label>
+                                        <span>变量名</span>
+                                        <input
+                                            v-model.trim="
+                                                action.targetVariableKey
+                                            "
+                                            type="text"
+                                            placeholder="例如 region / dashboard.filter"
+                                        />
+                                    </label>
+
+                                    <label>
+                                        <span>变量值</span>
+                                        <input
+                                            v-model="action.targetVariableValue"
+                                            type="text"
+                                            placeholder="例如 {{ widget.value }} 或 华东"
+                                        />
+                                    </label>
+                                </div>
+
+                                <p class="inspector-tip">
+                                    支持使用
+                                    <code v-pre>{{ widget.value }}</code>、
+                                    <code v-pre>{{ source.total }}</code>、
+                                    <code v-pre>{{ runtime.region }}</code>
+                                    这类模板引用当前组件、绑定数据源和已有运行时变量。
+                                </p>
+                            </template>
+
                             <div v-else class="inspector-empty">
                                 请选择动作类型后，再配置具体目标。
+                            </div>
+
+                            <template
+                                v-if="action.action === 'patch-widget-props'"
+                            >
+                                <label>
+                                    <span>属性补丁（JSON）</span>
+                                    <textarea
+                                        v-model="action.targetPropsPatch"
+                                        class="interaction-config__textarea"
+                                        rows="6"
+                                        placeholder='例如 {&#10;  "title": "{{ runtime.region }}",&#10;  "value": "{{ widget.value }}"&#10;}'
+                                    />
+                                </label>
+
+                                <p class="inspector-tip">
+                                    JSON 会按对象合并到目标组件运行态属性上；模板表达式支持保留原始类型，
+                                    比如 <code v-pre>{{ source.rows[0] }}</code>。
+                                </p>
+                            </template>
+
+                            <div class="interaction-condition">
+                                <div class="interaction-condition__head">
+                                    <span>执行条件</span>
+                                    <label class="interaction-condition__toggle">
+                                        <input
+                                            :checked="
+                                                hasInteractionCondition(action)
+                                            "
+                                            type="checkbox"
+                                            @change="
+                                                setInteractionConditionEnabled(
+                                                    action,
+                                                    $event.target.checked,
+                                                )
+                                            "
+                                        />
+                                        <em>{{
+                                            hasInteractionCondition(action)
+                                                ? '已启用'
+                                                : '未启用'
+                                        }}</em>
+                                    </label>
+                                </div>
+
+                                <p class="inspector-tip">
+                                    支持使用
+                                    <code>value</code>、
+                                    <code>items.length</code>、
+                                    <code>rows[0].status</code>
+                                    这类路径读取运行值。
+                                </p>
+
+                                <div
+                                    v-if="hasInteractionCondition(action)"
+                                    class="interaction-condition__body"
+                                >
+                                    <div class="interaction-condition__toolbar">
+                                        <label>
+                                            <span>组合方式</span>
+                                            <select
+                                                v-model="action.condition.logic"
+                                            >
+                                                <option
+                                                    v-for="option in interactionConditionLogicOptions"
+                                                    :key="option.value"
+                                                    :value="option.value"
+                                                >
+                                                    {{ option.label }}
+                                                </option>
+                                            </select>
+                                        </label>
+
+                                        <button
+                                            class="ghost inspector-inline-button"
+                                            type="button"
+                                            @click="
+                                                addInteractionConditionRule(
+                                                    action,
+                                                )
+                                            "
+                                        >
+                                            新增条件
+                                        </button>
+                                    </div>
+
+                                    <div class="interaction-condition__rules">
+                                        <article
+                                            v-for="(
+                                                rule, ruleIndex
+                                            ) in getInteractionConditionRules(
+                                                action,
+                                            )"
+                                            :key="
+                                                rule.id ||
+                                                `${action.id}-${ruleIndex}`
+                                            "
+                                            class="interaction-condition__rule"
+                                        >
+                                            <div
+                                                class="interaction-condition__rule-head"
+                                            >
+                                                <strong>
+                                                    条件 {{ ruleIndex + 1 }}
+                                                </strong>
+                                                <button
+                                                    v-if="
+                                                        getInteractionConditionRules(
+                                                            action,
+                                                        ).length > 1
+                                                    "
+                                                    class="ghost danger inspector-inline-button"
+                                                    type="button"
+                                                    @click="
+                                                        removeInteractionConditionRule(
+                                                            action,
+                                                            ruleIndex,
+                                                        )
+                                                    "
+                                                >
+                                                    删除
+                                                </button>
+                                            </div>
+
+                                            <div class="inspector-grid">
+                                                <label>
+                                                    <span>数据来源</span>
+                                                    <select
+                                                        v-model="rule.source"
+                                                    >
+                                                        <option
+                                                            v-for="option in interactionConditionSourceOptions"
+                                                            :key="option.value"
+                                                            :value="option.value"
+                                                        >
+                                                            {{ option.label }}
+                                                        </option>
+                                                    </select>
+                                                </label>
+
+                                                <label>
+                                                    <span>字段路径</span>
+                                                    <input
+                                                        v-model.trim="
+                                                            rule.field
+                                                        "
+                                                        type="text"
+                                                        placeholder="例如 value 或 rows[0].status"
+                                                    />
+                                                </label>
+
+                                                <label>
+                                                    <span>判断方式</span>
+                                                    <select
+                                                        v-model="
+                                                            rule.operator
+                                                        "
+                                                    >
+                                                        <option
+                                                            v-for="option in interactionConditionOperatorOptions"
+                                                            :key="option.value"
+                                                            :value="option.value"
+                                                        >
+                                                            {{ option.label }}
+                                                        </option>
+                                                    </select>
+                                                </label>
+
+                                                <label
+                                                    v-if="
+                                                        doesInteractionConditionUseValue(
+                                                            rule.operator,
+                                                        )
+                                                    "
+                                                >
+                                                    <span>比较值</span>
+                                                    <input
+                                                        v-model="rule.value"
+                                                        type="text"
+                                                        placeholder="例如 80、online、true"
+                                                    />
+                                                </label>
+                                            </div>
+
+                                            <p
+                                                v-if="
+                                                    rule.source ===
+                                                        'source-payload' &&
+                                                    !selectedWidget.dataBinding
+                                                        .sourceId
+                                                "
+                                                class="inspector-tip"
+                                            >
+                                                当前组件还没有绑定数据源，payload
+                                                条件暂时不会命中。
+                                            </p>
+                                        </article>
+                                    </div>
+
+                                    <p
+                                        v-if="
+                                            selectedWidget.interaction.trigger ===
+                                                'condition-match'
+                                        "
+                                        class="inspector-tip"
+                                    >
+                                        条件命中会在页面进入后、以及当前组件绑定数据源刷新后自动评估；仅在条件从未命中变为命中时触发一次。
+                                    </p>
+
+                                    <p class="inspector-tip">
+                                        当前条件组合：
+                                        {{ getInteractionConditionSummary(action) }}
+                                    </p>
+                                </div>
                             </div>
                         </div>
                     </article>
@@ -1614,6 +2308,226 @@ function isFilterTargetWidgetSelected(widgetId) {
                 </p>
             </InspectorSection>
         </div>
+
+        <InspectorSection
+            title="交互链路"
+            caption="查看当前项目的触发组件、动作目标和跨页跳转关系，并可快速定位到对应节点。"
+            storage-key="panel-interaction-overview"
+        >
+            <div class="interaction-overview">
+                <div class="interaction-overview__toolbar">
+                    <div class="interaction-overview__stats">
+                        <span class="interaction-overview__stat">
+                            已配置触发组件
+                            {{ interactionConfiguredWidgetCount }}
+                            个
+                        </span>
+                        <span class="interaction-overview__stat">
+                            当前范围动作
+                            {{ visibleInteractionFlowEntries.length }}
+                            条
+                        </span>
+                    </div>
+
+                    <div class="interaction-overview__scope">
+                        <button
+                            type="button"
+                            class="ghost inspector-inline-button"
+                            :class="{
+                                'is-active':
+                                    interactionFlowScope === 'current-page',
+                            }"
+                            @click="interactionFlowScope = 'current-page'"
+                        >
+                            当前页
+                        </button>
+                        <button
+                            type="button"
+                            class="ghost inspector-inline-button"
+                            :class="{
+                                'is-active': interactionFlowScope === 'all-pages',
+                            }"
+                            @click="interactionFlowScope = 'all-pages'"
+                        >
+                            全部页面
+                        </button>
+                    </div>
+                </div>
+
+                <div
+                    v-if="selectedWidget"
+                    class="interaction-overview__focus-grid"
+                >
+                    <div class="interaction-overview__focus-card">
+                        <div class="interaction-overview__focus-head">
+                            <span>当前组件发出</span>
+                            <strong>{{
+                                selectedWidgetOutgoingEntries.length
+                            }}</strong>
+                        </div>
+
+                        <div
+                            v-if="selectedWidgetOutgoingEntries.length"
+                            class="interaction-overview__mini-list"
+                        >
+                            <button
+                                v-for="entry in selectedWidgetOutgoingEntries"
+                                :key="`outgoing-${entry.id}`"
+                                type="button"
+                                class="interaction-overview__mini-item"
+                                @click="
+                                    locateInteractionNode({
+                                        pageId: entry.pageId,
+                                        widgetId: entry.sourceWidgetId,
+                                    })
+                                "
+                            >
+                                <strong>{{ entry.actionLabel }}</strong>
+                                <span>{{
+                                    getInteractionEntryTargetSummary(entry)
+                                }}</span>
+                            </button>
+                        </div>
+
+                        <div v-else class="inspector-empty">
+                            当前组件还没有配置动作。
+                        </div>
+                    </div>
+
+                    <div class="interaction-overview__focus-card">
+                        <div class="interaction-overview__focus-head">
+                            <span>当前组件被引用</span>
+                            <strong>{{
+                                selectedWidgetIncomingEntries.length
+                            }}</strong>
+                        </div>
+
+                        <div
+                            v-if="selectedWidgetIncomingEntries.length"
+                            class="interaction-overview__mini-list"
+                        >
+                            <button
+                                v-for="entry in selectedWidgetIncomingEntries"
+                                :key="`incoming-${entry.id}`"
+                                type="button"
+                                class="interaction-overview__mini-item"
+                                @click="
+                                    locateInteractionNode({
+                                        pageId: entry.pageId,
+                                        widgetId: entry.sourceWidgetId,
+                                    })
+                                "
+                            >
+                                <strong>{{ entry.sourceWidgetName }}</strong>
+                                <span>
+                                    {{ entry.actionLabel }} ·
+                                    {{ entry.pageName }}
+                                </span>
+                            </button>
+                        </div>
+
+                        <div v-else class="inspector-empty">
+                            当前组件还没有被其他动作引用。
+                        </div>
+                    </div>
+                </div>
+
+                <div
+                    v-if="visibleInteractionFlowEntries.length"
+                    class="interaction-overview__list"
+                >
+                    <article
+                        v-for="entry in visibleInteractionFlowEntries"
+                        :key="entry.id"
+                        class="interaction-edge"
+                    >
+                        <div class="interaction-edge__head">
+                            <button
+                                type="button"
+                                class="interaction-edge__source"
+                                @click="
+                                    locateInteractionNode({
+                                        pageId: entry.pageId,
+                                        widgetId: entry.sourceWidgetId,
+                                    })
+                                "
+                            >
+                                <span>{{ entry.pageName }}</span>
+                                <strong>{{ entry.sourceWidgetName }}</strong>
+                            </button>
+
+                            <div class="interaction-edge__meta">
+                                <span>{{ entry.triggerLabel }}</span>
+                                <span>{{ entry.actionLabel }}</span>
+                                <span>{{ entry.delayLabel }}</span>
+                            </div>
+                        </div>
+
+                        <p class="interaction-edge__summary">
+                            {{ getInteractionEntryTargetSummary(entry) }}
+                        </p>
+
+                        <p
+                            v-if="entry.conditionEnabled"
+                            class="interaction-edge__condition"
+                        >
+                            条件：{{ entry.conditionSummary }}
+                        </p>
+
+                        <div class="interaction-edge__targets">
+                            <button
+                                v-for="target in entry.targetWidgets"
+                                :key="`${entry.id}-${target.id}`"
+                                type="button"
+                                class="interaction-edge__target"
+                                :disabled="target.missing"
+                                @click="
+                                    locateInteractionNode({
+                                        pageId: target.pageId,
+                                        widgetId: target.id,
+                                    })
+                                "
+                            >
+                                <strong>{{ target.name }}</strong>
+                                <small>{{
+                                    target.pageName || "目标缺失"
+                                }}</small>
+                            </button>
+
+                            <span
+                                v-for="source in entry.targetSources"
+                                :key="`${entry.id}-${source.id}`"
+                                class="interaction-edge__badge"
+                                :class="{
+                                    'is-missing': source.missing,
+                                }"
+                            >
+                                {{ source.name }}
+                            </span>
+
+                            <button
+                                v-if="entry.targetPage"
+                                type="button"
+                                class="interaction-edge__target interaction-edge__target--page"
+                                :disabled="entry.targetPage.missing"
+                                @click="
+                                    locateInteractionNode({
+                                        pageId: entry.targetPage.id,
+                                    })
+                                "
+                            >
+                                <strong>{{ entry.targetPage.name }}</strong>
+                                <small>目标页面</small>
+                            </button>
+                        </div>
+                    </article>
+                </div>
+
+                <div v-else class="inspector-empty">
+                    当前范围还没有配置交互动作。
+                </div>
+            </div>
+        </InspectorSection>
 
         <LayerPanel
             :widgets="project.widgets"
