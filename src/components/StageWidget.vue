@@ -20,6 +20,10 @@ import {
     applyWidgetRuntimeFilters,
     getWidgetRuntimeFilters,
 } from "../editor/runtimeFilters";
+import {
+    createRuntimeTemplateScope,
+    resolveRuntimeTemplateValue,
+} from "../editor/runtimeTemplates";
 
 const BarChartWidget = defineAsyncComponent(
     () => import("./renderers/BarChartWidget.vue"),
@@ -76,7 +80,15 @@ const props = defineProps({
         type: Object,
         default: () => ({}),
     },
+    runtimeVariables: {
+        type: Object,
+        default: () => ({}),
+    },
     runtimeFilters: {
+        type: Object,
+        default: () => ({}),
+    },
+    pageContext: {
         type: Object,
         default: () => ({}),
     },
@@ -155,6 +167,8 @@ const interactionLabelMap = {
     "show-widgets": "显示组件",
     "hide-widgets": "隐藏组件",
     "toggle-widgets-visibility": "切换显隐",
+    "patch-widget-props": "更新属性",
+    "set-runtime-variable": "设置变量",
 };
 
 const interactionLabel = computed(() => {
@@ -165,33 +179,48 @@ const interactionLabel = computed(() => {
     return interactionLabelMap[interactionActions.value[0]?.action] ?? "";
 });
 
+function finalizeDisplayWidget(widget, sourcePayload = null) {
+    const runtimeFilters = getWidgetRuntimeFilters(
+        props.widget.id,
+        props.runtimeFilters,
+        props.widget.type,
+    );
+    const filteredWidget = {
+        ...widget,
+        props: applyWidgetRuntimeFilters(widget, runtimeFilters),
+    };
+
+    if (!props.previewMode) {
+        return filteredWidget;
+    }
+
+    const resolvedProps = resolveRuntimeTemplateValue(
+        filteredWidget.props,
+        createRuntimeTemplateScope({
+            widgetProps: filteredWidget.props,
+            sourcePayload,
+            runtimeVariables: props.runtimeVariables,
+            page: props.pageContext,
+        }),
+    );
+
+    return {
+        ...filteredWidget,
+        props: resolvedProps,
+    };
+}
+
 const displayWidget = computed(() => {
     const sourceId = props.widget.dataBinding?.sourceId;
 
     if (!sourceId) {
-        const runtimeFilters = getWidgetRuntimeFilters(
-            props.widget.id,
-            props.runtimeFilters,
-            props.widget.type,
-        );
-        return {
-            ...props.widget,
-            props: applyWidgetRuntimeFilters(props.widget, runtimeFilters),
-        };
+        return finalizeDisplayWidget(props.widget, null);
     }
 
     const runtimePayload = props.dataSourceRuntime[sourceId]?.payload;
 
     if (!runtimePayload) {
-        const runtimeFilters = getWidgetRuntimeFilters(
-            props.widget.id,
-            props.runtimeFilters,
-            props.widget.type,
-        );
-        return {
-            ...props.widget,
-            props: applyWidgetRuntimeFilters(props.widget, runtimeFilters),
-        };
+        return finalizeDisplayWidget(props.widget, null);
     }
 
     const mergedProps = {
@@ -222,20 +251,13 @@ const displayWidget = computed(() => {
         mergedProps.activeCategory = props.widget.props.activeCategory;
     }
 
-    const mergedWidget = {
-        ...props.widget,
-        props: mergedProps,
-    };
-    const runtimeFilters = getWidgetRuntimeFilters(
-        props.widget.id,
-        props.runtimeFilters,
-        props.widget.type,
+    return finalizeDisplayWidget(
+        {
+            ...props.widget,
+            props: mergedProps,
+        },
+        runtimePayload,
     );
-
-    return {
-        ...mergedWidget,
-        props: applyWidgetRuntimeFilters(mergedWidget, runtimeFilters),
-    };
 });
 
 let suppressClickInteraction = false;

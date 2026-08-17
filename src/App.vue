@@ -24,6 +24,11 @@ import {
     resolveFilterField,
 } from "./editor/runtimeFilters";
 import {
+    createRuntimeTemplateScope,
+    resolveRuntimeTemplateString,
+    resolveRuntimeTemplateValue,
+} from "./editor/runtimeTemplates";
+import {
     STORAGE_KEY,
     TEMPLATE_STORAGE_KEY,
     createDemoProject,
@@ -687,6 +692,20 @@ function findWidgetAcrossPages(widgetId) {
     );
 }
 
+function getWidgetRuntimePageContext(widget) {
+    const page = widget?.id
+        ? project.value.pages.find((item) =>
+              item.widgets.some((entry) => entry.id === widget.id),
+          ) ?? currentPage.value
+        : currentPage.value;
+
+    return {
+        id: page?.id ?? "",
+        name: page?.name ?? "",
+        title: page?.meta?.title ?? "",
+    };
+}
+
 function buildRuntimeWidgetView(widget) {
     if (!widget) {
         return null;
@@ -705,11 +724,23 @@ function buildRuntimeWidgetView(widget) {
 
     return {
         ...widget,
-        props: {
-            ...widget.props,
-            ...(runtimePayload ?? {}),
-            ...(propsPatch ?? {}),
-        },
+        props: resolveRuntimeTemplateValue(
+            {
+                ...widget.props,
+                ...(runtimePayload ?? {}),
+                ...(propsPatch ?? {}),
+            },
+            createRuntimeTemplateScope({
+                widgetProps: {
+                    ...widget.props,
+                    ...(runtimePayload ?? {}),
+                    ...(propsPatch ?? {}),
+                },
+                sourcePayload: runtimePayload,
+                runtimeVariables: runtimeVariables.value,
+                page: getWidgetRuntimePageContext(widget),
+            }),
+        ),
     };
 }
 
@@ -744,81 +775,12 @@ function getInteractionTemplateScope(widget) {
           null)
         : null;
 
-    return {
-        widget: runtimeWidget?.props ?? {},
-        source: sourcePayload,
-        runtime: runtimeVariables.value,
-        page: {
-            id: currentPage.value?.id ?? "",
-            name: currentPage.value?.name ?? "",
-            title: currentPage.value?.meta?.title ?? "",
-        },
-    };
-}
-
-function readInteractionTemplateValue(scope, expression) {
-    const trimmed = String(expression ?? "").trim();
-    const matched = trimmed.match(/^(widget|source|runtime|page)(?:\.(.+))?$/);
-
-    if (!matched) {
-        return undefined;
-    }
-
-    const rootValue = scope[matched[1]];
-
-    return matched[2] ? getValueByPath(rootValue, matched[2]) : rootValue;
-}
-
-function formatInteractionTemplateInlineValue(value) {
-    if (value === null || value === undefined) {
-        return "";
-    }
-
-    if (typeof value === "string") {
-        return value;
-    }
-
-    if (typeof value === "number" || typeof value === "boolean") {
-        return String(value);
-    }
-
-    return formatRuntimeDebugValue(value, 120);
-}
-
-function resolveInteractionTemplateString(template, scope) {
-    if (typeof template !== "string") {
-        return template;
-    }
-
-    const exactMatch = template.match(/^\s*\{\{\s*([^{}]+?)\s*\}\}\s*$/);
-
-    if (exactMatch) {
-        const resolved = readInteractionTemplateValue(scope, exactMatch[1]);
-        return resolved === undefined ? "" : resolved;
-    }
-
-    return template.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, expression) =>
-        formatInteractionTemplateInlineValue(
-            readInteractionTemplateValue(scope, expression),
-        ),
-    );
-}
-
-function resolveInteractionTemplateValue(value, scope) {
-    if (Array.isArray(value)) {
-        return value.map((item) => resolveInteractionTemplateValue(item, scope));
-    }
-
-    if (value && typeof value === "object") {
-        return Object.fromEntries(
-            Object.entries(value).map(([key, entryValue]) => [
-                key,
-                resolveInteractionTemplateValue(entryValue, scope),
-            ]),
-        );
-    }
-
-    return resolveInteractionTemplateString(value, scope);
+    return createRuntimeTemplateScope({
+        widgetProps: runtimeWidget?.props ?? {},
+        sourcePayload,
+        runtimeVariables: runtimeVariables.value,
+        page: getWidgetRuntimePageContext(widget),
+    });
 }
 
 function parseInteractionPropsPatch(text, scope) {
@@ -836,7 +798,7 @@ function parseInteractionPropsPatch(text, scope) {
 
         return {
             ok: true,
-            value: resolveInteractionTemplateValue(parsed, scope),
+            value: resolveRuntimeTemplateValue(parsed, scope),
         };
     } catch (error) {
         console.warn(error);
@@ -4310,7 +4272,7 @@ async function executeInteractionAction(widget, action) {
                 return false;
             }
 
-            const resolvedValue = resolveInteractionTemplateString(
+            const resolvedValue = resolveRuntimeTemplateString(
                 action.targetVariableValue,
                 getInteractionTemplateScope(widget),
             );
@@ -4856,6 +4818,7 @@ onBeforeUnmount(() => {
             :active-page-id="currentPageId"
             :linked-widget-ids="linkedWidgetIds"
             :data-source-runtime="dataSourceRuntime"
+            :runtime-variables="runtimeVariables"
             :runtime-filters="runtimeFilters"
             :debug-summary="runtimeDebugSummary"
             :debug-filters="runtimeDebugFilters"
@@ -4895,6 +4858,7 @@ onBeforeUnmount(() => {
                 :preview-mode="previewMode"
                 :linked-widget-ids="linkedWidgetIds"
                 :data-source-runtime="dataSourceRuntime"
+                :runtime-variables="runtimeVariables"
                 :runtime-filters="runtimeFilters"
                 @selection-change="updateSelection"
                 @add-widget="addWidget"

@@ -27,6 +27,10 @@ const props = defineProps({
         type: Object,
         default: () => ({}),
     },
+    runtimeVariables: {
+        type: Object,
+        default: () => ({}),
+    },
     runtimeFilters: {
         type: Object,
         default: () => ({}),
@@ -198,6 +202,7 @@ function formatSourceTime(timestamp) {
                 :preview-mode="true"
                 :linked-widget-ids="linkedWidgetIds"
                 :data-source-runtime="dataSourceRuntime"
+                :runtime-variables="runtimeVariables"
                 :runtime-filters="runtimeFilters"
                 :show-meta="false"
                 :runtime-mode="true"

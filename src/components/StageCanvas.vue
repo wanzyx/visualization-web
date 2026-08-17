@@ -45,6 +45,10 @@ const props = defineProps({
         type: Object,
         default: () => ({}),
     },
+    runtimeVariables: {
+        type: Object,
+        default: () => ({}),
+    },
     runtimeFilters: {
         type: Object,
         default: () => ({}),
@@ -1635,7 +1639,13 @@ watch(
                         :can-move="!widget.locked"
                         :linked-active="isLinkedActive(widget.id)"
                         :data-source-runtime="dataSourceRuntime"
+                        :runtime-variables="runtimeVariables"
                         :runtime-filters="runtimeFilters"
+                        :page-context="{
+                            id: project.id,
+                            name: project.name,
+                            title: project.meta?.title ?? '',
+                        }"
                         @select="handleWidgetSelect"
                         @drag-start="beginInteraction($event, 'move')"
                         @resize-start="beginInteraction($event, 'resize')"
