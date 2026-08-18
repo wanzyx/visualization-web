@@ -88,6 +88,8 @@ function serializeTextValue(value, fallback = "") {
 export function createDataSourceRequestConfig(overrides = {}) {
     const method = String(overrides.method || "GET").toUpperCase();
     const timeout = Number(overrides.timeout);
+    const retryCount = Number(overrides.retryCount);
+    const retryDelay = Number(overrides.retryDelay);
     const authMode = authModeOptions.some(
         (option) => option.value === overrides.authMode,
     )
@@ -129,6 +131,12 @@ export function createDataSourceRequestConfig(overrides = {}) {
                 ? overrides.authPassword
                 : "",
         timeout: Number.isFinite(timeout) ? Math.max(500, timeout) : 10000,
+        retryCount: Number.isFinite(retryCount)
+            ? Math.min(Math.max(Math.round(retryCount), 0), 5)
+            : 0,
+        retryDelay: Number.isFinite(retryDelay)
+            ? Math.max(200, retryDelay)
+            : 800,
         withCredentials: Boolean(overrides.withCredentials),
     };
 }
@@ -1537,6 +1545,59 @@ function applyAuthHeaders(headers, request) {
     }
 }
 
+function waitForRetryDelay(delay) {
+    return new Promise((resolve) => {
+        globalThis.setTimeout(resolve, delay);
+    });
+}
+
+function isAbortError(error) {
+    return error instanceof Error && error.name === "AbortError";
+}
+
+function createHttpStatusError(response) {
+    const error = new Error(
+        `HTTP ${response.status} ${response.statusText || ""}`.trim(),
+    );
+
+    error.retryable = response.status === 429 || response.status >= 500;
+    error.responseStatus = response.status;
+    return error;
+}
+
+function canRetryRemoteRequest(error, request, attemptIndex) {
+    if (attemptIndex >= request.retryCount) {
+        return false;
+    }
+
+    if (isAbortError(error)) {
+        return true;
+    }
+
+    if (error?.retryable === true) {
+        return true;
+    }
+
+    return error instanceof TypeError;
+}
+
+function normalizeRemoteRequestError(error, request, retryAttempts = 0) {
+    const baseMessage = isAbortError(error)
+        ? `请求超时（${request.timeout}ms）`
+        : error instanceof Error && error.message
+          ? error.message
+          : "请求失败";
+    const normalizedError = new Error(
+        retryAttempts > 0
+            ? `${baseMessage}，已重试 ${retryAttempts} 次`
+            : baseMessage,
+    );
+
+    normalizedError.retryAttempts = retryAttempts;
+    normalizedError.attemptCount = retryAttempts + 1;
+    return normalizedError;
+}
+
 function toPreviewValue(value) {
     if (typeof value === "string") {
         return value.length > 1800 ? `${value.slice(0, 1800)}...` : value;
@@ -2154,19 +2215,27 @@ async function fetchRemoteDataSourcePayload(source, basePayload, context = {}) {
     applyAuthHeaders(headers, resolvedRequest);
     const bodyValue = parseBodyValue(resolvedRequest.bodyText);
     const method = resolvedRequest.method.toUpperCase();
-    const controller =
-        typeof AbortController !== "undefined" ? new AbortController() : null;
-    let timerId = 0;
+    const shouldSendBody = !["GET", "HEAD"].includes(method);
+    let lastError = null;
 
-    if (controller && resolvedRequest.timeout > 0) {
-        timerId = globalThis.setTimeout(
-            () => controller.abort(),
-            resolvedRequest.timeout,
-        );
-    }
+    for (
+        let attemptIndex = 0;
+        attemptIndex <= resolvedRequest.retryCount;
+        attemptIndex += 1
+    ) {
+        const controller =
+            typeof AbortController !== "undefined"
+                ? new AbortController()
+                : null;
+        let timerId = 0;
 
-    try {
-        const shouldSendBody = !["GET", "HEAD"].includes(method);
+        if (controller && resolvedRequest.timeout > 0) {
+            timerId = globalThis.setTimeout(
+                () => controller.abort(),
+                resolvedRequest.timeout,
+            );
+        }
+
         const requestInit = {
             method,
             headers,
@@ -2194,64 +2263,82 @@ async function fetchRemoteDataSourcePayload(source, basePayload, context = {}) {
                     : JSON.stringify(bodyValue);
         }
 
-        const response = await fetch(resolvedRequest.url, requestInit);
+        try {
+            const response = await fetch(resolvedRequest.url, requestInit);
 
-        if (!response.ok) {
-            throw new Error(
-                `HTTP ${response.status} ${response.statusText || ""}`.trim(),
+            if (!response.ok) {
+                throw createHttpStatusError(response);
+            }
+
+            const contentType = response.headers.get("content-type") || "";
+            const responseData = contentType.includes("application/json")
+                ? await response.json()
+                : await response.text();
+            const extracted = resolvedRequest.dataPath
+                ? getValueByPath(responseData, resolvedRequest.dataPath)
+                : responseData;
+            const fieldMappings = parseFieldMappingsText(
+                resolvedRequest.fieldMappingsText,
             );
-        }
+            const mappedPayload = applyFieldMappings(
+                basePayload,
+                extracted,
+                fieldMappings,
+            );
+            const meta = {
+                requestPreview: buildRequestPreview(
+                    resolvedRequest.url,
+                    method,
+                    headers,
+                    requestInit.body ?? "",
+                    resolvedRequest,
+                ),
+                responseStatus: response.status,
+                responseStatusText: response.statusText || "",
+                responsePreview: toPreviewValue(responseData),
+                extractedPreview: toPreviewValue(extracted),
+                mappedFieldCount: Object.keys(fieldMappings).length,
+                retryAttempts: attemptIndex,
+                attemptCount: attemptIndex + 1,
+            };
 
-        const contentType = response.headers.get("content-type") || "";
-        const responseData = contentType.includes("application/json")
-            ? await response.json()
-            : await response.text();
-        const extracted = resolvedRequest.dataPath
-            ? getValueByPath(responseData, resolvedRequest.dataPath)
-            : responseData;
-        const fieldMappings = parseFieldMappingsText(
-            resolvedRequest.fieldMappingsText,
-        );
-        const mappedPayload = applyFieldMappings(
-            basePayload,
-            extracted,
-            fieldMappings,
-        );
-        const meta = {
-            requestPreview: buildRequestPreview(
-                resolvedRequest.url,
-                method,
-                headers,
-                requestInit.body ?? "",
-                resolvedRequest,
-            ),
-            responseStatus: response.status,
-            responseStatusText: response.statusText || "",
-            responsePreview: toPreviewValue(responseData),
-            extractedPreview: toPreviewValue(extracted),
-            mappedFieldCount: Object.keys(fieldMappings).length,
-        };
+            if (mappedPayload) {
+                return {
+                    payload: mappedPayload,
+                    meta,
+                };
+            }
 
-        if (mappedPayload) {
             return {
-                payload: mappedPayload,
+                payload: normalizeRemotePayload(
+                    source.type,
+                    extracted,
+                    basePayload,
+                ),
                 meta,
             };
-        }
+        } catch (error) {
+            const normalizedError = normalizeRemoteRequestError(
+                error,
+                resolvedRequest,
+                attemptIndex,
+            );
 
-        return {
-            payload: normalizeRemotePayload(
-                source.type,
-                extracted,
-                basePayload,
-            ),
-            meta,
-        };
-    } finally {
-        if (timerId) {
-            globalThis.clearTimeout(timerId);
+            lastError = normalizedError;
+
+            if (!canRetryRemoteRequest(error, resolvedRequest, attemptIndex)) {
+                throw normalizedError;
+            }
+
+            await waitForRetryDelay(resolvedRequest.retryDelay);
+        } finally {
+            if (timerId) {
+                globalThis.clearTimeout(timerId);
+            }
         }
     }
+
+    throw lastError ?? new Error("请求失败");
 }
 
 export function generateDataSourcePayload(source) {

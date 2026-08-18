@@ -125,6 +125,14 @@ function getRefreshCount(sourceId) {
     return getRuntimeEntry(sourceId).refreshCount ?? 0;
 }
 
+function getRetryAttempts(sourceId) {
+    return getRuntimeEntry(sourceId).retryAttempts ?? 0;
+}
+
+function getAttemptCount(sourceId) {
+    return getRuntimeEntry(sourceId).attemptCount ?? 0;
+}
+
 function formatDebugValue(value) {
     if (value === null || value === undefined || value === "") {
         return "";
@@ -435,7 +443,9 @@ function hasMoreSourceUsages(sourceId) {
                         <code>&#123;&#123; projectTitle &#125;&#125;</code>
                         和
                         <code>&#123;&#123; env.VITE_XXX &#125;&#125;</code>
-                        这类占位变量拼接请求。
+                        这类占位变量拼接请求；请求超时、429 和 5xx
+                        失败可以按下方策略自动重试。鉴权凭据只保存在当前浏览器，
+                        项目导出和数据源复制配置会自动脱敏。
                     </p>
 
                     <div class="inspector-grid">
@@ -479,6 +489,27 @@ function hasMoreSourceUsages(sourceId) {
                                 type="number"
                                 min="500"
                                 step="500"
+                            />
+                        </label>
+
+                        <label>
+                            <span>重试次数</span>
+                            <input
+                                v-model.number="source.request.retryCount"
+                                type="number"
+                                min="0"
+                                max="5"
+                                step="1"
+                            />
+                        </label>
+
+                        <label>
+                            <span>重试间隔（ms）</span>
+                            <input
+                                v-model.number="source.request.retryDelay"
+                                type="number"
+                                min="200"
+                                step="100"
                             />
                         </label>
                     </div>
@@ -660,7 +691,19 @@ function hasMoreSourceUsages(sourceId) {
                                 getMappedFieldCount(source.id)
                             }}</span
                         >
-                        <span v-else
+                        <span
+                            v-if="
+                                isRemoteSource(source) &&
+                                getAttemptCount(source.id)
+                            "
+                        >
+                            {{
+                                getRetryAttempts(source.id)
+                                    ? `重试 ${getRetryAttempts(source.id)} 次`
+                                    : "首轮成功"
+                            }}
+                        </span>
+                        <span v-if="!isRemoteSource(source)"
                             >刷新次数：{{ getRefreshCount(source.id) }}</span
                         >
                         <div

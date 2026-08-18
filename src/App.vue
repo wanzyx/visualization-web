@@ -15,6 +15,7 @@ import TopToolbar from "./components/TopToolbar.vue";
 import { materials, createWidget } from "./editor/materials";
 import {
     createDataSource,
+    createDataSourceRequestConfig,
     getValueByPath,
     normalizeDataSource,
     resolveDataSourceRuntime,
@@ -55,6 +56,11 @@ const PROJECT_SYNC_DELAY = 120;
 const TEMPLATE_LIMIT = 30;
 const LINKED_WIDGET_DURATION = 1800;
 const RUNTIME_DEBUG_EVENT_LIMIT = 80;
+const RUNTIME_VARIABLE_HISTORY_LIMIT = 80;
+const RUNTIME_PERFORMANCE_LIMIT = 80;
+const INTERACTION_CHAIN_MAX_DEPTH = 12;
+const INTERACTION_CHAIN_MAX_STEPS = 60;
+const INTERACTION_CHAIN_REPEAT_LIMIT = 2;
 const CONDITION_VALUE_OPERATORS = new Set([
     "eq",
     "neq",
@@ -88,31 +94,70 @@ const CONDITION_OPERATOR_LABEL_MAP = {
 };
 const PROJECT_LIBRARY_STORAGE_KEY = "visualization-web-project-library-v1";
 const ACTIVE_PROJECT_STORAGE_KEY = "visualization-web-active-project-v1";
+const DATA_SOURCE_SECRET_STORAGE_KEY = "visualization-web-source-secrets-v1";
+const PUBLISHED_SNAPSHOT_STORAGE_KEY = "visualization-web-published-snapshots-v1";
+const DATA_SOURCE_SECRET_FIELDS = [
+    "authToken",
+    "authUsername",
+    "authPassword",
+];
+
+let dataSourceSecretStoreState = loadDataSourceSecretStore();
 
 const initialRoute = getInitialRouteState();
 const initialProjectState = loadProjectState();
-const appMode = ref(initialRoute.mode);
+const initialPublishedSnapshots = loadPublishedSnapshotLibrary();
+const initialPublishedRuntimeState = resolvePublishedRuntimeState(
+    initialRoute,
+    initialPublishedSnapshots,
+);
+const shouldUsePublishedRuntime =
+    initialRoute.mode === "runtime" &&
+    Boolean(initialRoute.publishId) &&
+    Boolean(initialPublishedRuntimeState);
+const initialProject = shouldUsePublishedRuntime
+    ? initialPublishedRuntimeState.project
+    : initialProjectState.project;
+const initialAppMode =
+    initialRoute.mode === "runtime" && initialRoute.publishId
+        ? shouldUsePublishedRuntime
+            ? "runtime"
+            : "editor"
+        : initialRoute.mode;
+const appMode = ref(initialAppMode);
 const previewMode = ref(false);
 const dialogMode = ref(null);
 const dialogText = ref("");
 const templateDraftName = ref("");
 const projectDraftName = ref("");
+const publishedSnapshotDraftName = ref("");
+const publishedSnapshotDraftNote = ref("");
 const dialogSourceId = ref("");
 const statusMessage = ref("已启用多页面、模板库、数据源和事件联动");
 
-const project = ref(initialProjectState.project);
+const project = ref(initialProject);
 const projectLibrary = ref(initialProjectState.library);
 const activeProjectRecordId = ref(initialProjectState.activeProjectId);
+const publishedSnapshots = ref(initialPublishedSnapshots);
 const templates = ref(loadTemplateLibrary());
 const dataSourceRuntime = ref({});
 const widgetRuntimeState = ref({});
 const runtimeVariables = ref(
-    buildRuntimeVariablePresetState(initialProjectState.project),
+    buildRuntimeVariablePresetState(initialProject),
 );
+const runtimeVariableHistory = ref([]);
+const runtimePerformanceHistory = ref([]);
 const runtimeFilters = ref({});
 const runtimeDebugEvents = ref([]);
 const linkedWidgetIds = ref([]);
-const runtimePageId = ref(initialRoute.pageId || "");
+const runtimePageId = ref(
+    shouldUsePublishedRuntime
+        ? initialPublishedRuntimeState.pageId
+        : initialRoute.pageId || "",
+);
+const runtimePublishedSnapshotId = ref(
+    shouldUsePublishedRuntime ? initialPublishedRuntimeState.snapshot.id : "",
+);
 const clipboardTemplate = ref(null);
 
 const sourceRefreshTimers = new Map();
@@ -123,9 +168,13 @@ let linkedWidgetTimerId = 0;
 let projectSyncTimerId = 0;
 let interactionRunToken = 0;
 let interactivePageInitToken = 0;
+let interactionChainSeed = 0;
 let lastProjectSnapshot = JSON.stringify(project.value);
 
 const isRuntimeMode = computed(() => appMode.value === "runtime");
+const isPublishedRuntime = computed(
+    () => isRuntimeMode.value && Boolean(runtimePublishedSnapshotId.value),
+);
 
 const currentPageId = computed(() => {
     const fallbackPageId =
@@ -251,6 +300,20 @@ const currentProjectName = computed(
         currentProjectRecord.value?.name ??
         deriveProjectRecordName(project.value),
 );
+const currentPublishedSnapshot = computed(
+    () =>
+        publishedSnapshots.value.find(
+            (item) => item.id === runtimePublishedSnapshotId.value,
+        ) ?? null,
+);
+const currentProjectPublishedSnapshots = computed(() =>
+    publishedSnapshots.value
+        .filter((item) => item.projectRecordId === activeProjectRecordId.value)
+        .sort((left, right) => right.updatedAt - left.updatedAt),
+);
+const latestProjectPublishedSnapshot = computed(
+    () => currentProjectPublishedSnapshots.value[0] ?? null,
+);
 
 const runtimeDebugSummary = computed(() => {
     const sourceEntries = project.value.dataSources.map((source) => {
@@ -265,13 +328,28 @@ const runtimeDebugSummary = computed(() => {
     const visibleWidgetCount = currentWidgets.value.filter(
         (widget) => !widget.hidden,
     ).length;
+    const performanceEntries = runtimePerformanceHistory.value;
+    const performanceDurations = performanceEntries
+        .map((entry) => Math.max(0, Number(entry.duration) || 0))
+        .filter((duration) => duration > 0);
+    const latestPageInitEntry = performanceEntries.find(
+        (entry) => entry.type === "page-init",
+    );
+    const latestSourceRefreshEntry = performanceEntries.find(
+        (entry) => entry.type === "source-refresh-batch",
+    );
+    const latestInteractionEntry = performanceEntries.find(
+        (entry) => entry.type === "interaction-chain",
+    );
 
     return {
-        mode: isRuntimeMode.value
-            ? "runtime"
-            : previewMode.value
-              ? "preview"
-              : "editor",
+        mode: isPublishedRuntime.value
+            ? "published-runtime"
+            : isRuntimeMode.value
+              ? "runtime"
+              : previewMode.value
+                ? "preview"
+                : "editor",
         pageId: currentPageId.value,
         pageName: currentPage.value?.name ?? "未命名页面",
         pageTitle: currentPage.value?.meta?.title ?? "未命名大屏",
@@ -288,6 +366,23 @@ const runtimeDebugSummary = computed(() => {
         activeFilterCount: Object.keys(runtimeFilters.value).length,
         linkedWidgetCount: linkedWidgetIds.value.length,
         variableCount: Object.keys(runtimeVariables.value).length,
+        variableHistoryCount: runtimeVariableHistory.value.length,
+        performanceCount: performanceEntries.length,
+        lastPerformanceDuration: performanceDurations[0] ?? 0,
+        averagePerformanceDuration: performanceDurations.length
+            ? Math.round(
+                  performanceDurations.reduce(
+                      (sum, duration) => sum + duration,
+                      0,
+                  ) / performanceDurations.length,
+              )
+            : 0,
+        slowestPerformanceDuration: performanceDurations.length
+            ? Math.max(...performanceDurations)
+            : 0,
+        lastPageInitDuration: latestPageInitEntry?.duration ?? 0,
+        lastSourceRefreshDuration: latestSourceRefreshEntry?.duration ?? 0,
+        lastInteractionDuration: latestInteractionEntry?.duration ?? 0,
     };
 });
 
@@ -319,6 +414,31 @@ const runtimeDebugVariables = computed(() =>
         .sort((left, right) => left.key.localeCompare(right.key, "zh-CN")),
 );
 
+const runtimeDebugVariableHistory = computed(() =>
+    runtimeVariableHistory.value.map((entry) => ({
+        ...entry,
+        previousPreview:
+            entry.previousValue === undefined
+                ? ""
+                : formatRuntimeDebugValue(entry.previousValue, 80),
+        nextPreview:
+            entry.nextValue === undefined
+                ? ""
+                : formatRuntimeDebugValue(entry.nextValue, 80),
+    })),
+);
+
+const runtimeDebugPerformance = computed(() =>
+    runtimePerformanceHistory.value.map((entry) => ({
+        ...entry,
+        durationLabel: formatRuntimeDebugDuration(entry.duration),
+        averageStepDurationLabel:
+            entry.executedCount > 0
+                ? formatRuntimeDebugDuration(entry.duration / entry.executedCount)
+                : "",
+    })),
+);
+
 const runtimeDebugSources = computed(() =>
     project.value.dataSources
         .map((source) => {
@@ -336,6 +456,8 @@ const runtimeDebugSources = computed(() =>
                 responseStatus: runtime.responseStatus,
                 responseStatusText: runtime.responseStatusText ?? "",
                 mappedFieldCount: runtime.mappedFieldCount ?? 0,
+                retryAttempts: runtime.retryAttempts ?? 0,
+                attemptCount: runtime.attemptCount ?? 0,
                 error: runtime.error ?? "",
             };
         })
@@ -367,6 +489,17 @@ function getSourceInteractionLabel(actionType) {
             return "交互显隐切换";
         default:
             return "交互引用";
+    }
+}
+
+function getInteractionTriggerLabel(trigger) {
+    switch (trigger) {
+        case "page-enter":
+            return "页面进入";
+        case "condition-match":
+            return "条件命中";
+        default:
+            return "组件点击";
     }
 }
 
@@ -475,6 +608,173 @@ function clearRuntimeDebugEvents(options = {}) {
     }
 }
 
+function formatRuntimeDebugDuration(duration) {
+    const normalizedDuration = Math.max(0, Number(duration) || 0);
+
+    if (normalizedDuration < 1000) {
+        return `${Math.round(normalizedDuration)}ms`;
+    }
+
+    if (normalizedDuration < 10000) {
+        return `${(normalizedDuration / 1000).toFixed(1)}s`;
+    }
+
+    if (normalizedDuration < 60000) {
+        return `${Math.round(normalizedDuration / 1000)}s`;
+    }
+
+    const minutes = Math.floor(normalizedDuration / 60000);
+    const seconds = Math.round((normalizedDuration % 60000) / 1000);
+
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+function pushRuntimePerformanceEntry(entry = {}) {
+    if (!entry.type || (!canCaptureRuntimeDebug() && entry.force !== true)) {
+        return;
+    }
+
+    const nextEntry = {
+        id:
+            globalThis.crypto?.randomUUID?.() ??
+            `runtime-performance-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        at: entry.at ?? Date.now(),
+        type: String(entry.type ?? "").trim(),
+        duration: Math.max(0, Number(entry.duration) || 0),
+        sourceLabel:
+            typeof entry.sourceLabel === "string" && entry.sourceLabel.trim()
+                ? entry.sourceLabel.trim()
+                : "运行态链路",
+        detail:
+            typeof entry.detail === "string" ? entry.detail.trim() : "",
+        pageId: typeof entry.pageId === "string" ? entry.pageId.trim() : "",
+        pageName:
+            typeof entry.pageName === "string" && entry.pageName.trim()
+                ? entry.pageName.trim()
+                : currentPage.value?.name ?? "",
+        widgetId: typeof entry.widgetId === "string" ? entry.widgetId.trim() : "",
+        widgetName:
+            typeof entry.widgetName === "string" ? entry.widgetName.trim() : "",
+        actionCount: Math.max(0, Number(entry.actionCount) || 0),
+        executedCount: Math.max(0, Number(entry.executedCount) || 0),
+        skippedCount: Math.max(0, Number(entry.skippedCount) || 0),
+        successCount: Math.max(0, Number(entry.successCount) || 0),
+        failureCount: Math.max(0, Number(entry.failureCount) || 0),
+        sourceCount: Math.max(0, Number(entry.sourceCount) || 0),
+        refreshDataSources: entry.refreshDataSources === true,
+        cancelled: entry.cancelled === true,
+    };
+
+    runtimePerformanceHistory.value = [
+        nextEntry,
+        ...runtimePerformanceHistory.value,
+    ].slice(0, RUNTIME_PERFORMANCE_LIMIT);
+}
+
+function clearRuntimePerformanceHistory(options = {}) {
+    runtimePerformanceHistory.value = [];
+
+    if (!options.silent) {
+        statusMessage.value = "已清空执行耗时记录";
+    }
+}
+
+function cloneRuntimeVariableValue(value) {
+    return value === undefined ? undefined : cloneDeep(value);
+}
+
+function compareRuntimeVariableValue(left, right) {
+    if (
+        left &&
+        right &&
+        typeof left === "object" &&
+        typeof right === "object"
+    ) {
+        try {
+            return JSON.stringify(left) === JSON.stringify(right);
+        } catch (error) {
+            console.warn(error);
+            return false;
+        }
+    }
+
+    return left === right;
+}
+
+function getRuntimeVariableChangedKeys(previousState = {}, nextState = {}) {
+    const changedKeys = [];
+    const keys = new Set([
+        ...Object.keys(previousState ?? {}),
+        ...Object.keys(nextState ?? {}),
+    ]);
+
+    keys.forEach((key) => {
+        if (
+            !compareRuntimeVariableValue(previousState?.[key], nextState?.[key])
+        ) {
+            changedKeys.push(key);
+        }
+    });
+
+    return changedKeys.sort((left, right) => left.localeCompare(right, "zh-CN"));
+}
+
+function pushRuntimeVariableHistoryEntry(entry = {}) {
+    if (!entry.action) {
+        return;
+    }
+
+    const nextEntry = {
+        id:
+            globalThis.crypto?.randomUUID?.() ??
+            `runtime-variable-history-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        at: entry.at ?? Date.now(),
+        action: entry.action,
+        key: typeof entry.key === "string" ? entry.key.trim() : "",
+        previousValue: cloneRuntimeVariableValue(entry.previousValue),
+        nextValue: cloneRuntimeVariableValue(entry.nextValue),
+        changedCount: Math.max(0, Number(entry.changedCount) || 0),
+        changedKeys: Array.isArray(entry.changedKeys)
+            ? entry.changedKeys.filter((item) => typeof item === "string" && item)
+            : [],
+        sourceLabel:
+            typeof entry.sourceLabel === "string" && entry.sourceLabel.trim()
+                ? entry.sourceLabel.trim()
+                : "运行时变量",
+        widgetName:
+            typeof entry.widgetName === "string" ? entry.widgetName.trim() : "",
+        pageName:
+            typeof entry.pageName === "string" && entry.pageName.trim()
+                ? entry.pageName.trim()
+                : currentPage.value?.name ?? "",
+    };
+
+    runtimeVariableHistory.value = [
+        nextEntry,
+        ...runtimeVariableHistory.value,
+    ].slice(0, RUNTIME_VARIABLE_HISTORY_LIMIT);
+}
+
+function clearRuntimeVariableHistory(options = {}) {
+    runtimeVariableHistory.value = [];
+
+    if (!options.silent) {
+        statusMessage.value = "已清空变量变更历史";
+    }
+}
+
+function startRuntimeVariableSession(options = {}) {
+    clearRuntimeVariableHistory({ silent: true });
+    clearRuntimePerformanceHistory({ silent: true });
+    return resetRuntimeVariables(options.projectSchema ?? project.value, {
+        recordHistory: options.recordHistory !== false,
+        action: options.action ?? "init",
+        sourceLabel: options.sourceLabel ?? "项目预设",
+        pageName: options.pageName ?? currentPage.value?.name ?? "",
+        forceHistory: options.forceHistory !== false,
+    });
+}
+
 function buildRuntimeVariablePresetState(projectSchema = project.value) {
     return (Array.isArray(projectSchema?.runtimeVariablePresets)
         ? projectSchema.runtimeVariablePresets
@@ -495,12 +795,52 @@ function resetWidgetRuntimeState() {
     widgetRuntimeState.value = {};
 }
 
-function clearRuntimeVariables() {
+function clearRuntimeVariables(options = {}) {
+    const previousState = runtimeVariables.value;
+    const changedKeys = Object.keys(previousState).sort((left, right) =>
+        left.localeCompare(right, "zh-CN"),
+    );
+
     runtimeVariables.value = {};
+
+    if ((options.recordHistory || options.forceHistory) && changedKeys.length) {
+        pushRuntimeVariableHistoryEntry({
+            action: "clear",
+            changedCount: changedKeys.length,
+            changedKeys,
+            sourceLabel: options.sourceLabel ?? "调试抽屉",
+            pageName: options.pageName,
+        });
+    }
+
+    return changedKeys.length;
 }
 
-function resetRuntimeVariables(projectSchema = project.value) {
-    runtimeVariables.value = buildRuntimeVariablePresetState(projectSchema);
+function resetRuntimeVariables(projectSchema = project.value, options = {}) {
+    const previousState = runtimeVariables.value;
+    const nextState = buildRuntimeVariablePresetState(projectSchema);
+    const changedKeys = getRuntimeVariableChangedKeys(previousState, nextState);
+
+    runtimeVariables.value = nextState;
+
+    if (
+        options.recordHistory &&
+        (changedKeys.length || options.forceHistory === true)
+    ) {
+        pushRuntimeVariableHistoryEntry({
+            action: options.action ?? "reset",
+            changedCount: changedKeys.length || Object.keys(nextState).length,
+            changedKeys: changedKeys.length
+                ? changedKeys
+                : Object.keys(nextState).sort((left, right) =>
+                      left.localeCompare(right, "zh-CN"),
+                  ),
+            sourceLabel: options.sourceLabel ?? "项目预设",
+            pageName: options.pageName,
+        });
+    }
+
+    return changedKeys.length;
 }
 
 function resetRuntimeFilters() {
@@ -571,18 +911,53 @@ function setRuntimeWidgetPropsPatch(widgetId, propsPatch = {}) {
     };
 }
 
-function setRuntimeVariable(key, value) {
+function setRuntimeVariable(key, value, options = {}) {
     const nextKey = String(key ?? "").trim();
 
     if (!nextKey) {
-        return false;
+        return {
+            updated: false,
+            changed: false,
+        };
+    }
+
+    const previousValue = runtimeVariables.value[nextKey];
+    const changed = !compareRuntimeVariableValue(previousValue, value);
+
+    if (!changed) {
+        return {
+            updated: true,
+            changed: false,
+            previousValue,
+            nextValue: value,
+        };
     }
 
     runtimeVariables.value = {
         ...runtimeVariables.value,
         [nextKey]: value,
     };
-    return true;
+
+    if (options.recordHistory && changed) {
+        pushRuntimeVariableHistoryEntry({
+            action: "set",
+            key: nextKey,
+            previousValue,
+            nextValue: value,
+            changedCount: 1,
+            changedKeys: [nextKey],
+            sourceLabel: options.sourceLabel ?? "交互动作",
+            widgetName: options.widgetName,
+            pageName: options.pageName,
+        });
+    }
+
+    return {
+        updated: true,
+        changed,
+        previousValue,
+        nextValue: value,
+    };
 }
 
 function applyRuntimeFilterWidget(widget, value, label = "") {
@@ -1119,6 +1494,465 @@ function getConditionMatchStateKey(pageId, widgetId, actionId) {
     return `${pageId}:${widgetId}:${actionId}`;
 }
 
+function loadDataSourceSecretStore() {
+    if (typeof localStorage === "undefined") {
+        return {};
+    }
+
+    const rawValue = localStorage.getItem(DATA_SOURCE_SECRET_STORAGE_KEY);
+
+    if (!rawValue) {
+        return {};
+    }
+
+    try {
+        const parsed = JSON.parse(rawValue);
+
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return {};
+        }
+
+        return Object.fromEntries(
+            Object.entries(parsed)
+                .map(([projectId, sources]) => {
+                    if (
+                        !sources ||
+                        typeof sources !== "object" ||
+                        Array.isArray(sources)
+                    ) {
+                        return null;
+                    }
+
+                    const normalizedSources = Object.fromEntries(
+                        Object.entries(sources)
+                            .map(([sourceId, secretPayload]) => {
+                                if (
+                                    !secretPayload ||
+                                    typeof secretPayload !== "object" ||
+                                    Array.isArray(secretPayload)
+                                ) {
+                                    return null;
+                                }
+
+                                const normalizedSecrets = Object.fromEntries(
+                                    DATA_SOURCE_SECRET_FIELDS.filter(
+                                        (field) =>
+                                            typeof secretPayload[field] ===
+                                                "string" &&
+                                            secretPayload[field] !== "",
+                                    ).map((field) => [
+                                        field,
+                                        secretPayload[field],
+                                    ]),
+                                );
+
+                                return Object.keys(normalizedSecrets).length
+                                    ? [sourceId, normalizedSecrets]
+                                    : null;
+                            })
+                            .filter(Boolean),
+                    );
+
+                    return Object.keys(normalizedSources).length
+                        ? [projectId, normalizedSources]
+                        : null;
+                })
+                .filter(Boolean),
+        );
+    } catch (error) {
+        console.warn(error);
+        return {};
+    }
+}
+
+function persistDataSourceSecretStore() {
+    if (typeof localStorage === "undefined") {
+        return;
+    }
+
+    localStorage.setItem(
+        DATA_SOURCE_SECRET_STORAGE_KEY,
+        JSON.stringify(dataSourceSecretStoreState),
+    );
+}
+
+function extractSourceRequestSecrets(request = {}) {
+    return Object.fromEntries(
+        DATA_SOURCE_SECRET_FIELDS.filter(
+            (field) =>
+                typeof request?.[field] === "string" && request[field] !== "",
+        ).map((field) => [field, request[field]]),
+    );
+}
+
+function projectContainsSourceSecrets(projectData) {
+    return (projectData?.dataSources ?? []).some((source) =>
+        Object.keys(extractSourceRequestSecrets(source?.request ?? {})).length,
+    );
+}
+
+function sanitizeSourceRequestSecrets(request = {}) {
+    const nextRequest = createDataSourceRequestConfig(request);
+
+    DATA_SOURCE_SECRET_FIELDS.forEach((field) => {
+        nextRequest[field] = "";
+    });
+
+    return nextRequest;
+}
+
+function sanitizeProjectSourceSecrets(projectData) {
+    const nextProject = cloneDeep(projectData);
+
+    nextProject.dataSources = Array.isArray(nextProject.dataSources)
+        ? nextProject.dataSources.map((source) => ({
+              ...source,
+              request: sanitizeSourceRequestSecrets(source?.request ?? {}),
+          }))
+        : [];
+
+    return nextProject;
+}
+
+function rememberProjectSourceSecrets(projectId, projectData) {
+    const normalizedProjectId = String(projectId || "").trim();
+
+    if (!normalizedProjectId) {
+        return;
+    }
+
+    const nextProjectSecrets = Object.fromEntries(
+        (projectData?.dataSources ?? [])
+            .map((source) => {
+                if (!source?.id) {
+                    return null;
+                }
+
+                const secretPayload = extractSourceRequestSecrets(
+                    source.request ?? {},
+                );
+
+                return Object.keys(secretPayload).length
+                    ? [source.id, secretPayload]
+                    : null;
+            })
+            .filter(Boolean),
+    );
+
+    if (Object.keys(nextProjectSecrets).length) {
+        dataSourceSecretStoreState = {
+            ...dataSourceSecretStoreState,
+            [normalizedProjectId]: nextProjectSecrets,
+        };
+    } else if (dataSourceSecretStoreState[normalizedProjectId]) {
+        const nextStore = {
+            ...dataSourceSecretStoreState,
+        };
+
+        delete nextStore[normalizedProjectId];
+        dataSourceSecretStoreState = nextStore;
+    }
+
+    persistDataSourceSecretStore();
+}
+
+function hydrateProjectSourceSecrets(projectData, projectId) {
+    const normalizedProject = normalizeProjectSchema(cloneDeep(projectData));
+    const normalizedProjectId = String(projectId || "").trim();
+    const projectSecrets = normalizedProjectId
+        ? dataSourceSecretStoreState[normalizedProjectId]
+        : null;
+
+    if (!projectSecrets) {
+        return normalizedProject;
+    }
+
+    normalizedProject.dataSources.forEach((source) => {
+        if (!source?.id) {
+            return;
+        }
+
+        const sourceSecrets = projectSecrets[source.id];
+
+        if (!sourceSecrets) {
+            return;
+        }
+
+        const nextRequest = createDataSourceRequestConfig(source.request ?? {});
+
+        DATA_SOURCE_SECRET_FIELDS.forEach((field) => {
+            if (
+                (typeof nextRequest[field] !== "string" ||
+                    nextRequest[field] === "") &&
+                typeof sourceSecrets[field] === "string"
+            ) {
+                nextRequest[field] = sourceSecrets[field];
+            }
+        });
+
+        source.request = nextRequest;
+    });
+
+    return normalizedProject;
+}
+
+function removeProjectSourceSecrets(projectId) {
+    const normalizedProjectId = String(projectId || "").trim();
+
+    if (!normalizedProjectId || !dataSourceSecretStoreState[normalizedProjectId]) {
+        return;
+    }
+
+    const nextStore = {
+        ...dataSourceSecretStoreState,
+    };
+
+    delete nextStore[normalizedProjectId];
+    dataSourceSecretStoreState = nextStore;
+    persistDataSourceSecretStore();
+}
+
+function copyProjectSourceSecrets(fromProjectId, toProjectId) {
+    const sourceProjectId = String(fromProjectId || "").trim();
+    const targetProjectId = String(toProjectId || "").trim();
+
+    if (!sourceProjectId || !targetProjectId) {
+        return;
+    }
+
+    const sourceSecrets = dataSourceSecretStoreState[sourceProjectId];
+
+    if (!sourceSecrets) {
+        removeProjectSourceSecrets(targetProjectId);
+        return;
+    }
+
+    dataSourceSecretStoreState = {
+        ...dataSourceSecretStoreState,
+        [targetProjectId]: cloneDeep(sourceSecrets),
+    };
+    persistDataSourceSecretStore();
+}
+
+function buildProjectExportPayload(projectData) {
+    return JSON.stringify(sanitizeProjectSourceSecrets(projectData), null, 2);
+}
+
+function getRestorableEditorProject() {
+    if (currentProjectRecord.value) {
+        return hydrateProjectSourceSecrets(
+            JSON.parse(currentProjectRecord.value.snapshot),
+            currentProjectRecord.value.id,
+        );
+    }
+
+    return loadProject();
+}
+
+function createPublishedSnapshotId() {
+    return (
+        globalThis.crypto?.randomUUID?.() ??
+        `publish-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    );
+}
+
+function normalizePublishedSnapshotRecord(rawRecord, index = 0) {
+    if (
+        !rawRecord ||
+        typeof rawRecord !== "object" ||
+        typeof rawRecord.snapshot !== "string"
+    ) {
+        return null;
+    }
+
+    try {
+        const normalizedProject = normalizeProjectSchema(
+            JSON.parse(rawRecord.snapshot),
+        );
+        const pageId =
+            typeof rawRecord.pageId === "string" &&
+            normalizedProject.pages.some((page) => page.id === rawRecord.pageId)
+                ? rawRecord.pageId
+                : normalizedProject.activePageId ||
+                  normalizedProject.pages[0]?.id ||
+                  "";
+        const pageName =
+            normalizedProject.pages.find((page) => page.id === pageId)?.name ??
+            rawRecord.pageName ??
+            "未命名页面";
+
+        return {
+            id:
+                typeof rawRecord.id === "string" && rawRecord.id
+                    ? rawRecord.id
+                    : `publish-${index + 1}`,
+            name:
+                typeof rawRecord.name === "string" && rawRecord.name.trim()
+                    ? rawRecord.name.trim()
+                    : deriveProjectRecordName(normalizedProject),
+            projectRecordId:
+                typeof rawRecord.projectRecordId === "string"
+                    ? rawRecord.projectRecordId
+                    : "",
+            projectName:
+                typeof rawRecord.projectName === "string" &&
+                rawRecord.projectName.trim()
+                    ? rawRecord.projectName.trim()
+                    : deriveProjectRecordName(normalizedProject),
+            pageId,
+            pageName,
+            createdAt: Number.isFinite(Number(rawRecord.createdAt))
+                ? Number(rawRecord.createdAt)
+                : Date.now(),
+            updatedAt: Number.isFinite(Number(rawRecord.updatedAt))
+                ? Number(rawRecord.updatedAt)
+                : Date.now(),
+            snapshot: JSON.stringify(
+                sanitizeProjectSourceSecrets(normalizedProject),
+            ),
+        };
+    } catch (error) {
+        console.warn(error);
+        return null;
+    }
+}
+
+function loadPublishedSnapshotLibrary() {
+    if (typeof localStorage === "undefined") {
+        return [];
+    }
+
+    const rawValue = localStorage.getItem(PUBLISHED_SNAPSHOT_STORAGE_KEY);
+
+    if (!rawValue) {
+        return [];
+    }
+
+    try {
+        const parsed = JSON.parse(rawValue);
+
+        if (!Array.isArray(parsed)) {
+            return [];
+        }
+
+        return parsed
+            .map((item, index) => normalizePublishedSnapshotRecord(item, index))
+            .filter(Boolean)
+            .sort((left, right) => right.updatedAt - left.updatedAt);
+    } catch (error) {
+        console.warn(error);
+        return [];
+    }
+}
+
+function persistPublishedSnapshotLibrary(library) {
+    if (typeof localStorage === "undefined") {
+        return;
+    }
+
+    localStorage.setItem(
+        PUBLISHED_SNAPSHOT_STORAGE_KEY,
+        JSON.stringify(library),
+    );
+}
+
+function resolvePublishedRuntimeState(routeState, snapshotLibrary) {
+    if (!routeState?.publishId) {
+        return null;
+    }
+
+    const snapshot =
+        snapshotLibrary.find((item) => item.id === routeState.publishId) ?? null;
+
+    if (!snapshot) {
+        return null;
+    }
+
+    const normalizedProject = normalizeProjectSchema(JSON.parse(snapshot.snapshot));
+    const pageId =
+        typeof routeState.pageId === "string" &&
+        normalizedProject.pages.some((page) => page.id === routeState.pageId)
+            ? routeState.pageId
+            : snapshot.pageId ||
+              normalizedProject.activePageId ||
+              normalizedProject.pages[0]?.id ||
+              "";
+
+    if (pageId) {
+        normalizedProject.activePageId = pageId;
+    }
+
+    return {
+        snapshot,
+        project: normalizedProject,
+        pageId,
+    };
+}
+
+function buildPublishedSnapshotRecord(projectData, options = {}) {
+    const normalizedProject = normalizeProjectSchema(cloneDeep(projectData));
+    const pageId =
+        typeof options.pageId === "string" &&
+        normalizedProject.pages.some((page) => page.id === options.pageId)
+            ? options.pageId
+            : normalizedProject.activePageId ||
+              normalizedProject.pages[0]?.id ||
+              "";
+    const pageName =
+        normalizedProject.pages.find((page) => page.id === pageId)?.name ??
+        "未命名页面";
+
+    if (pageId) {
+        normalizedProject.activePageId = pageId;
+    }
+
+    return {
+        id: createPublishedSnapshotId(),
+        name:
+            typeof options.name === "string" && options.name.trim()
+                ? options.name.trim()
+                : `${deriveProjectRecordName(normalizedProject)} 发布版`,
+        projectRecordId:
+            typeof options.projectRecordId === "string"
+                ? options.projectRecordId
+                : "",
+        projectName:
+            typeof options.projectName === "string" && options.projectName.trim()
+                ? options.projectName.trim()
+                : deriveProjectRecordName(normalizedProject),
+        pageId,
+        pageName,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        snapshot: JSON.stringify(
+            sanitizeProjectSourceSecrets(normalizedProject),
+        ),
+    };
+}
+
+function buildPublishedRuntimeLink(snapshotId, pageId = "") {
+    if (typeof window === "undefined") {
+        return "";
+    }
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("mode", "runtime");
+
+    if (snapshotId) {
+        url.searchParams.set("publishId", snapshotId);
+    } else {
+        url.searchParams.delete("publishId");
+    }
+
+    if (pageId) {
+        url.searchParams.set("page", pageId);
+    } else {
+        url.searchParams.delete("page");
+    }
+
+    return url.toString();
+}
+
 function getInteractionActionLabel(actionType) {
     switch (actionType) {
         case "highlight-widgets":
@@ -1261,12 +2095,19 @@ function normalizeProjectRecord(rawRecord, index = 0) {
         const normalizedProject = normalizeProjectSchema(
             JSON.parse(rawRecord.snapshot),
         );
+        const recordId =
+            typeof rawRecord.id === "string" && rawRecord.id
+                ? rawRecord.id
+                : `project-${index + 1}`;
+
+        if (projectContainsSourceSecrets(normalizedProject)) {
+            rememberProjectSourceSecrets(recordId, normalizedProject);
+        }
+
+        const sanitizedProject = sanitizeProjectSourceSecrets(normalizedProject);
 
         return {
-            id:
-                typeof rawRecord.id === "string" && rawRecord.id
-                    ? rawRecord.id
-                    : `project-${index + 1}`,
+            id: recordId,
             name:
                 typeof rawRecord.name === "string" && rawRecord.name.trim()
                     ? rawRecord.name.trim()
@@ -1274,7 +2115,7 @@ function normalizeProjectRecord(rawRecord, index = 0) {
             updatedAt: Number.isFinite(Number(rawRecord.updatedAt))
                 ? Number(rawRecord.updatedAt)
                 : Date.now(),
-            snapshot: JSON.stringify(normalizedProject),
+            snapshot: JSON.stringify(sanitizedProject),
         };
     } catch (error) {
         console.warn(error);
@@ -1284,15 +2125,18 @@ function normalizeProjectRecord(rawRecord, index = 0) {
 
 function buildProjectRecord(projectData, overrides = {}) {
     const normalizedProject = normalizeProjectSchema(cloneDeep(projectData));
+    const recordId = overrides.id ?? createProjectRecordId();
+
+    rememberProjectSourceSecrets(recordId, normalizedProject);
 
     return {
-        id: overrides.id ?? createProjectRecordId(),
+        id: recordId,
         name:
             typeof overrides.name === "string" && overrides.name.trim()
                 ? overrides.name.trim()
                 : deriveProjectRecordName(normalizedProject),
         updatedAt: overrides.updatedAt ?? Date.now(),
-        snapshot: JSON.stringify(normalizedProject),
+        snapshot: JSON.stringify(sanitizeProjectSourceSecrets(normalizedProject)),
     };
 }
 
@@ -1365,7 +2209,10 @@ function loadProjectState() {
         persistProjectLibraryState([initialRecord], initialRecord.id);
 
         return {
-            project: normalizeProjectSchema(JSON.parse(initialRecord.snapshot)),
+            project: hydrateProjectSourceSecrets(
+                JSON.parse(initialRecord.snapshot),
+                initialRecord.id,
+            ),
             library: [initialRecord],
             activeProjectId: initialRecord.id,
         };
@@ -1381,7 +2228,10 @@ function loadProjectState() {
     persistProjectLibraryState(library, activeRecord.id);
 
     return {
-        project: normalizeProjectSchema(JSON.parse(activeRecord.snapshot)),
+        project: hydrateProjectSourceSecrets(
+            JSON.parse(activeRecord.snapshot),
+            activeRecord.id,
+        ),
         library,
         activeProjectId: activeRecord.id,
     };
@@ -1392,6 +2242,7 @@ function getInitialRouteState() {
         return {
             mode: "editor",
             pageId: "",
+            publishId: "",
         };
     }
 
@@ -1399,6 +2250,7 @@ function getInitialRouteState() {
     return {
         mode: url.searchParams.get("mode") === "runtime" ? "runtime" : "editor",
         pageId: url.searchParams.get("page") || "",
+        publishId: url.searchParams.get("publishId") || "",
     };
 }
 
@@ -1417,9 +2269,16 @@ function syncRoute() {
         } else {
             url.searchParams.delete("page");
         }
+
+        if (runtimePublishedSnapshotId.value) {
+            url.searchParams.set("publishId", runtimePublishedSnapshotId.value);
+        } else {
+            url.searchParams.delete("publishId");
+        }
     } else {
         url.searchParams.delete("mode");
         url.searchParams.delete("page");
+        url.searchParams.delete("publishId");
     }
 
     window.history.replaceState(
@@ -1513,17 +2372,27 @@ function flushProjectSync() {
         projectSyncTimerId = 0;
     }
 
+    if (isPublishedRuntime.value) {
+        lastProjectSnapshot = JSON.stringify(project.value);
+        return;
+    }
+
     const nextSnapshot = JSON.stringify(project.value);
 
     if (nextSnapshot === lastProjectSnapshot) {
         return;
     }
 
+    rememberProjectSourceSecrets(activeProjectRecordId.value, project.value);
+    const persistedSnapshot = JSON.stringify(
+        sanitizeProjectSourceSecrets(project.value),
+    );
+
     if (typeof localStorage !== "undefined") {
-        localStorage.setItem(STORAGE_KEY, nextSnapshot);
+        localStorage.setItem(STORAGE_KEY, persistedSnapshot);
     }
 
-    syncActiveProjectRecord(nextSnapshot);
+    syncActiveProjectRecord(persistedSnapshot);
 
     if (!isRestoringHistory.value) {
         const previousSnapshot = lastProjectSnapshot;
@@ -1634,6 +2503,8 @@ function createSourceRuntimeEntry(source, overrides = {}) {
         responsePreview: overrides.responsePreview ?? "",
         extractedPreview: overrides.extractedPreview ?? "",
         mappedFieldCount: overrides.mappedFieldCount ?? 0,
+        retryAttempts: overrides.retryAttempts ?? 0,
+        attemptCount: overrides.attemptCount ?? 0,
     };
 }
 
@@ -1677,6 +2548,7 @@ function normalizeRefreshOptions(options = {}) {
     return {
         silent: options.silent === true,
         triggerConditionMatch: options.triggerConditionMatch !== false,
+        runContext: options.runContext ?? null,
     };
 }
 
@@ -1771,6 +2643,139 @@ function waitForInteractionDelay(delay, token) {
     });
 }
 
+function createInteractionRunContext(options = {}) {
+    interactionChainSeed += 1;
+
+    return {
+        id: `interaction-chain-${Date.now()}-${interactionChainSeed}`,
+        sourceLabel:
+            typeof options.sourceLabel === "string" && options.sourceLabel.trim()
+                ? options.sourceLabel.trim()
+                : "交互执行",
+        totalSteps: 0,
+        activeDepth: 0,
+        blocked: false,
+        blockedReason: "",
+        activeKeys: new Set(),
+        visitedKeys: new Map(),
+    };
+}
+
+function stopInteractionRunContext(runContext, detail) {
+    if (!runContext || runContext.blocked) {
+        return false;
+    }
+
+    runContext.blocked = true;
+    runContext.blockedReason = detail;
+    statusMessage.value = "检测到联动循环，已自动停止本次执行";
+    pushRuntimeDebugEvent({
+        level: "warning",
+        category: "interaction",
+        title: "联动已自动停止",
+        detail,
+    });
+    return true;
+}
+
+function buildInteractionStepKey(widget, action, pageId = currentPageId.value) {
+    return [
+        pageId || "unknown-page",
+        widget?.id || "unknown-widget",
+        action?.id || action?.action || "unknown-action",
+        action?.action || "none",
+    ].join(":");
+}
+
+function enterInteractionRunStep(
+    runContext,
+    widget,
+    action,
+    pageId = currentPageId.value,
+) {
+    if (!runContext) {
+        return {
+            ok: true,
+            release() {},
+        };
+    }
+
+    if (runContext.blocked) {
+        return {
+            ok: false,
+            reason: runContext.blockedReason,
+            release() {},
+        };
+    }
+
+    const widgetName = widget?.name || "未命名组件";
+    const actionLabel = getInteractionActionLabel(action?.action || "none");
+    const stepKey = buildInteractionStepKey(widget, action, pageId);
+
+    if (runContext.activeKeys.has(stepKey)) {
+        stopInteractionRunContext(
+            runContext,
+            `${runContext.sourceLabel} · ${widgetName} / ${actionLabel} 出现递归回路`,
+        );
+        return {
+            ok: false,
+            reason: runContext.blockedReason,
+            release() {},
+        };
+    }
+
+    if (runContext.activeDepth + 1 > INTERACTION_CHAIN_MAX_DEPTH) {
+        stopInteractionRunContext(
+            runContext,
+            `${runContext.sourceLabel} · 嵌套层级超过 ${INTERACTION_CHAIN_MAX_DEPTH} 层`,
+        );
+        return {
+            ok: false,
+            reason: runContext.blockedReason,
+            release() {},
+        };
+    }
+
+    if (runContext.totalSteps + 1 > INTERACTION_CHAIN_MAX_STEPS) {
+        stopInteractionRunContext(
+            runContext,
+            `${runContext.sourceLabel} · 单次联动超过 ${INTERACTION_CHAIN_MAX_STEPS} 步`,
+        );
+        return {
+            ok: false,
+            reason: runContext.blockedReason,
+            release() {},
+        };
+    }
+
+    const nextVisitCount = (runContext.visitedKeys.get(stepKey) ?? 0) + 1;
+
+    if (nextVisitCount > INTERACTION_CHAIN_REPEAT_LIMIT) {
+        stopInteractionRunContext(
+            runContext,
+            `${runContext.sourceLabel} · ${widgetName} / ${actionLabel} 在单次链路内重复触发过多`,
+        );
+        return {
+            ok: false,
+            reason: runContext.blockedReason,
+            release() {},
+        };
+    }
+
+    runContext.totalSteps += 1;
+    runContext.activeDepth += 1;
+    runContext.visitedKeys.set(stepKey, nextVisitCount);
+    runContext.activeKeys.add(stepKey);
+
+    return {
+        ok: true,
+        release() {
+            runContext.activeKeys.delete(stepKey);
+            runContext.activeDepth = Math.max(runContext.activeDepth - 1, 0);
+        },
+    };
+}
+
 function syncSourceRefreshTimers() {
     clearSourceRefreshTimers();
 
@@ -1841,6 +2846,8 @@ async function performDataSourceRefresh(sourceId, options = {}) {
                 responsePreview: result.meta?.responsePreview ?? "",
                 extractedPreview: result.meta?.extractedPreview ?? "",
                 mappedFieldCount: result.meta?.mappedFieldCount ?? 0,
+                retryAttempts: result.meta?.retryAttempts ?? 0,
+                attemptCount: result.meta?.attemptCount ?? 0,
             }),
         };
 
@@ -1856,6 +2863,9 @@ async function performDataSourceRefresh(sourceId, options = {}) {
                       ? "远程接口"
                       : "本地数据",
                 `${Date.now() - refreshStartedAt}ms`,
+                result.meta?.retryAttempts
+                    ? `重试 ${result.meta.retryAttempts} 次`
+                    : "首轮成功",
             ]
                 .filter(Boolean)
                 .join(" · "),
@@ -1865,13 +2875,14 @@ async function performDataSourceRefresh(sourceId, options = {}) {
             normalizedOptions.triggerConditionMatch &&
             (previewMode.value || isRuntimeMode.value)
         ) {
-            void triggerConditionMatchInteractions(
+            await triggerConditionMatchInteractions(
                 isRuntimeMode.value
                     ? runtimePageId.value || currentPageId.value
                     : currentPageId.value,
                 {
                     sourceId: activeSource.id,
                     reason: "source-refresh",
+                    runContext: normalizedOptions.runContext,
                 },
             );
         }
@@ -1892,6 +2903,14 @@ async function performDataSourceRefresh(sourceId, options = {}) {
                 ...fallbackCurrent,
                 payload: fallbackCurrent.payload ?? activeSource.payload,
                 error: message,
+                retryAttempts:
+                    typeof error?.retryAttempts === "number"
+                        ? error.retryAttempts
+                        : fallbackCurrent.retryAttempts ?? 0,
+                attemptCount:
+                    typeof error?.attemptCount === "number"
+                        ? error.attemptCount
+                        : fallbackCurrent.attemptCount ?? 0,
             }),
         };
 
@@ -1958,6 +2977,7 @@ async function refreshDataSource(sourceId, options = {}) {
 
 async function refreshAllDataSources(options = {}) {
     const normalizedOptions = normalizeRefreshOptions(options);
+    const refreshStartedAt = Date.now();
 
     if (!project.value.dataSources.length) {
         if (!normalizedOptions.silent) {
@@ -1984,6 +3004,26 @@ async function refreshAllDataSources(options = {}) {
         );
     }
 
+    if (options.recordPerformance !== false) {
+        pushRuntimePerformanceEntry({
+            type: "source-refresh-batch",
+            duration: Date.now() - refreshStartedAt,
+            sourceLabel:
+                typeof options.sourceLabel === "string" &&
+                options.sourceLabel.trim()
+                    ? options.sourceLabel.trim()
+                    : normalizedOptions.silent
+                      ? "系统刷新"
+                      : "手动刷新",
+            detail: `${successCount} 成功 / ${failureCount} 失败`,
+            sourceCount: project.value.dataSources.length,
+            successCount,
+            failureCount,
+            pageId: currentPageId.value,
+            pageName: currentPage.value?.name ?? "",
+        });
+    }
+
     return {
         successCount,
         failureCount,
@@ -1996,17 +3036,25 @@ async function initializeInteractivePage(
 ) {
     const activePageId = pageId || currentPageId.value;
     const refreshDataSources = options.refreshDataSources !== false;
+    const initializeStartedAt = Date.now();
 
     if (!activePageId) {
         return;
     }
 
     const token = ++interactivePageInitToken;
+    const activePage =
+        project.value.pages.find((page) => page.id === activePageId) ?? null;
+    let refreshResult = {
+        successCount: 0,
+        failureCount: 0,
+    };
 
     if (refreshDataSources) {
-        await refreshAllDataSources({
+        refreshResult = await refreshAllDataSources({
             silent: true,
             triggerConditionMatch: false,
+            sourceLabel: "页面初始化",
         });
     }
 
@@ -2030,16 +3078,31 @@ async function initializeInteractivePage(
     await triggerConditionMatchInteractions(activePageId, {
         reason: "page-init",
     });
+    const initializeDuration = Date.now() - initializeStartedAt;
     pushRuntimeDebugEvent({
         level: "info",
         category: "page",
         title: "页面运行态已初始化",
-        detail: `${project.value.pages.find((page) => page.id === activePageId)?.name ?? activePageId}${refreshDataSources ? " · 已同步数据与联动" : " · 已同步联动状态"}`,
+        detail: `${activePage?.name ?? activePageId}${refreshDataSources ? " · 已同步数据与联动" : " · 已同步联动状态"} · ${formatRuntimeDebugDuration(initializeDuration)}`,
         pageId: activePageId,
-        pageName:
-            project.value.pages.find((page) => page.id === activePageId)?.name ??
-            "",
+        pageName: activePage?.name ?? "",
     });
+    if (options.recordPerformance !== false) {
+        pushRuntimePerformanceEntry({
+            type: "page-init",
+            duration: initializeDuration,
+            sourceLabel: "页面初始化",
+            detail: refreshDataSources
+                ? `${refreshResult.successCount} 个数据源已同步`
+                : "已跳过数据源刷新",
+            pageId: activePageId,
+            pageName: activePage?.name ?? "",
+            sourceCount: project.value.dataSources.length,
+            successCount: refreshResult.successCount,
+            failureCount: refreshResult.failureCount,
+            refreshDataSources,
+        });
+    }
 }
 
 function formatClipboardValue(value) {
@@ -2227,7 +3290,7 @@ function serializeSourceConfig(source) {
         type: source.type,
         generator: source.generator,
         refreshInterval: source.refreshInterval,
-        request: cloneDeep(source.request),
+        request: sanitizeSourceRequestSecrets(source.request),
         payload: cloneDeep(source.payload),
     };
 }
@@ -2325,8 +3388,156 @@ function openSourceCreateDialog() {
     dialogText.value = "";
 }
 
+function buildPublishedSnapshotDraftName() {
+    const timestamp = new Intl.DateTimeFormat("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+    }).format(new Date());
+
+    return `${currentProjectName.value} ${timestamp}`;
+}
+
+function openPublishManagerDialog() {
+    publishedSnapshotDraftName.value = buildPublishedSnapshotDraftName();
+    dialogMode.value = "project-publish";
+}
+
+function publishCurrentProjectSnapshot() {
+    const snapshot = buildPublishedSnapshotRecord(project.value, {
+        name: publishedSnapshotDraftName.value,
+        projectRecordId: activeProjectRecordId.value,
+        projectName: currentProjectName.value,
+        pageId: currentPageId.value,
+    });
+
+    publishedSnapshots.value = [snapshot, ...publishedSnapshots.value].sort(
+        (left, right) => right.updatedAt - left.updatedAt,
+    );
+    persistPublishedSnapshotLibrary(publishedSnapshots.value);
+    publishedSnapshotDraftName.value = snapshot.name;
+    statusMessage.value = `已发布快照：${snapshot.name}`;
+}
+
+async function copyPublishedSnapshotLink(snapshotId, options = {}) {
+    const snapshot =
+        publishedSnapshots.value.find((item) => item.id === snapshotId) ?? null;
+
+    if (!snapshot) {
+        statusMessage.value = "发布快照不存在，无法复制链接";
+        return false;
+    }
+
+    const targetPageId =
+        options.pageId ||
+        (runtimePublishedSnapshotId.value === snapshot.id
+            ? currentPageId.value
+            : snapshot.pageId);
+    const copied = await copyTextToClipboard(
+        buildPublishedRuntimeLink(snapshot.id, targetPageId),
+        {
+            successMessage: "发布地址已复制到剪贴板",
+            failureMessage: "发布地址复制失败，请手动复制浏览器地址",
+        },
+    );
+
+    if (copied) {
+        pushRuntimeDebugEvent({
+            level: "info",
+            category: "runtime",
+            title: "已复制发布地址",
+            detail: `${snapshot.name} · ${snapshot.pageName}`,
+            force: true,
+        });
+    }
+
+    return copied;
+}
+
+function deletePublishedSnapshot(snapshotId) {
+    const snapshot =
+        publishedSnapshots.value.find((item) => item.id === snapshotId) ?? null;
+
+    if (!snapshot) {
+        return;
+    }
+
+    publishedSnapshots.value = publishedSnapshots.value.filter(
+        (item) => item.id !== snapshotId,
+    );
+    persistPublishedSnapshotLibrary(publishedSnapshots.value);
+    statusMessage.value = `已删除发布快照：${snapshot.name}`;
+}
+
+function deletePublishedSnapshotsByProject(projectRecordId) {
+    if (!projectRecordId) {
+        return;
+    }
+
+    const nextSnapshots = publishedSnapshots.value.filter(
+        (item) => item.projectRecordId !== projectRecordId,
+    );
+
+    if (nextSnapshots.length === publishedSnapshots.value.length) {
+        return;
+    }
+
+    publishedSnapshots.value = nextSnapshots;
+    persistPublishedSnapshotLibrary(publishedSnapshots.value);
+}
+
+function activatePublishedRuntime(snapshotId, options = {}) {
+    const resolved = resolvePublishedRuntimeState(
+        {
+            mode: "runtime",
+            pageId: options.pageId ?? "",
+            publishId: snapshotId,
+        },
+        publishedSnapshots.value,
+    );
+
+    if (!resolved) {
+        statusMessage.value = "发布快照不存在，无法打开运行态";
+        return false;
+    }
+
+    closeDialog();
+    cancelInteractionRuns();
+    cancelInteractivePageInitialization();
+    clearConditionMatchState();
+    previewMode.value = false;
+    project.value = resolved.project;
+    lastProjectSnapshot = JSON.stringify(project.value);
+    runtimePublishedSnapshotId.value = resolved.snapshot.id;
+    runtimePageId.value = resolved.pageId;
+    resetWidgetRuntimeState();
+    clearRuntimeDebugEvents({ silent: true });
+    startRuntimeVariableSession({
+        sourceLabel: "发布快照会话",
+    });
+    resetRuntimeFilters();
+    clearLinkedWidgetState();
+    appMode.value = "runtime";
+    syncSourceRefreshTimers();
+    statusMessage.value = `已打开发布快照：${resolved.snapshot.name}`;
+    pushRuntimeDebugEvent({
+        level: "info",
+        category: "runtime",
+        title: "已进入发布运行态",
+        detail: `${resolved.snapshot.name} · ${resolved.snapshot.pageName}`,
+        force: true,
+    });
+    void initializeInteractivePage(resolved.pageId);
+    return true;
+}
+
 async function copyRuntimeLink() {
-    if (typeof window === "undefined") {
+    if (isPublishedRuntime.value && currentPublishedSnapshot.value) {
+        await copyPublishedSnapshotLink(currentPublishedSnapshot.value.id, {
+            pageId: currentPageId.value,
+        });
         return;
     }
 
@@ -2335,14 +3546,11 @@ async function copyRuntimeLink() {
         project.value.activePageId ||
         project.value.pages[0]?.id ||
         "";
-    const url = new URL(window.location.href);
-    url.searchParams.set("mode", "runtime");
+    const url = buildPublishedRuntimeLink("", pageId);
+    const runtimeUrl = new URL(url || window.location.href);
+    runtimeUrl.searchParams.delete("publishId");
 
-    if (pageId) {
-        url.searchParams.set("page", pageId);
-    }
-
-    const copied = await copyTextToClipboard(url.toString(), {
+    const copied = await copyTextToClipboard(runtimeUrl.toString(), {
         successMessage: "运行地址已复制到剪贴板",
         failureMessage: "运行地址复制失败，请手动复制浏览器地址",
     });
@@ -2365,6 +3573,8 @@ function buildRuntimeDebugSnapshot() {
         summary: runtimeDebugSummary.value,
         filters: runtimeDebugFilters.value,
         variables: runtimeDebugVariables.value,
+        variableHistory: runtimeDebugVariableHistory.value,
+        performance: runtimeDebugPerformance.value,
         sources: runtimeDebugSources.value,
         events: runtimeDebugEvents.value,
     };
@@ -2382,13 +3592,19 @@ async function copyRuntimeDebugSnapshot() {
             level: "info",
             category: "runtime",
             title: "已复制调试快照",
-            detail: `${runtimeDebugEvents.value.length} 条事件，${runtimeDebugSources.value.length} 个数据源，${runtimeDebugVariables.value.length} 个变量`,
+            detail: `${runtimeDebugEvents.value.length} 条事件，${runtimeDebugSources.value.length} 个数据源，${runtimeDebugVariables.value.length} 个变量，${runtimeDebugVariableHistory.value.length} 条变量历史，${runtimeDebugPerformance.value.length} 条耗时记录`,
         });
     }
 }
 
 async function resetRuntimeVariablesToPresets() {
-    resetRuntimeVariables();
+    const changedCount = resetRuntimeVariables(project.value, {
+        recordHistory: true,
+        action: "reset",
+        sourceLabel: "调试抽屉",
+        pageName: currentPage.value?.name ?? "",
+        forceHistory: true,
+    });
     await triggerConditionMatchInteractions(getActiveInteractivePageId(), {
         reason: "runtime-variable-reset",
     });
@@ -2397,12 +3613,18 @@ async function resetRuntimeVariablesToPresets() {
         level: "info",
         category: "runtime",
         title: "运行时变量已重置",
-        detail: `${runtimeDebugVariables.value.length} 个变量已恢复为项目预设`,
+        detail: changedCount
+            ? `${changedCount} 个变量已恢复为项目预设`
+            : "当前变量与项目预设一致",
     });
 }
 
 async function clearRuntimeVariablesForSession() {
-    clearRuntimeVariables();
+    const clearedCount = clearRuntimeVariables({
+        recordHistory: true,
+        sourceLabel: "调试抽屉",
+        pageName: currentPage.value?.name ?? "",
+    });
     await triggerConditionMatchInteractions(getActiveInteractivePageId(), {
         reason: "runtime-variable-clear",
     });
@@ -2411,7 +3633,37 @@ async function clearRuntimeVariablesForSession() {
         level: "warning",
         category: "runtime",
         title: "运行时变量已清空",
-        detail: "当前会话的变量值已全部移除",
+        detail: clearedCount
+            ? `当前会话共移除 ${clearedCount} 个变量值`
+            : "当前会话没有可清空的变量",
+    });
+}
+
+function clearRuntimeVariableHistoryForSession() {
+    const removedCount = runtimeVariableHistory.value.length;
+    clearRuntimeVariableHistory({ silent: true });
+    statusMessage.value = "已清空变量变更历史";
+    pushRuntimeDebugEvent({
+        level: "info",
+        category: "runtime",
+        title: "变量变更历史已清空",
+        detail: removedCount
+            ? `已移除 ${removedCount} 条变量变更记录`
+            : "当前没有变量变更记录",
+    });
+}
+
+function clearRuntimePerformanceHistoryForSession() {
+    const removedCount = runtimePerformanceHistory.value.length;
+    clearRuntimePerformanceHistory({ silent: true });
+    statusMessage.value = "已清空执行耗时记录";
+    pushRuntimeDebugEvent({
+        level: "info",
+        category: "runtime",
+        title: "执行耗时记录已清空",
+        detail: removedCount
+            ? `已移除 ${removedCount} 条耗时记录`
+            : "当前没有执行耗时记录",
     });
 }
 
@@ -2452,7 +3704,10 @@ function enterRuntimeMode() {
     clearConditionMatchState();
     previewMode.value = false;
     resetWidgetRuntimeState();
-    resetRuntimeVariables();
+    runtimePublishedSnapshotId.value = "";
+    startRuntimeVariableSession({
+        sourceLabel: "运行页会话",
+    });
     resetRuntimeFilters();
     clearLinkedWidgetState();
     runtimePageId.value =
@@ -2473,10 +3728,23 @@ function enterRuntimeMode() {
 }
 
 function exitRuntimeMode() {
+    if (isPublishedRuntime.value) {
+        const nextProject = getRestorableEditorProject();
+
+        runtimePublishedSnapshotId.value = "";
+        applyProjectState(nextProject, {
+            closeDialog: false,
+            statusMessage: "已退出发布运行态",
+        });
+        return;
+    }
+
     cancelInteractionRuns();
     cancelInteractivePageInitialization();
     clearConditionMatchState();
     resetWidgetRuntimeState();
+    clearRuntimeVariableHistory({ silent: true });
+    clearRuntimePerformanceHistory({ silent: true });
     resetRuntimeVariables();
     resetRuntimeFilters();
     const pageId = currentPageId.value;
@@ -3542,6 +4810,7 @@ function applyProjectState(nextProject, options = {}) {
     currentHistoryLabel.value = "当前项目";
     lastHistoryCommitAt.value = 0;
     lastHistoryCommitLabel.value = "";
+    runtimePublishedSnapshotId.value = "";
     appMode.value = "editor";
     previewMode.value = false;
     runtimePageId.value = "";
@@ -3549,6 +4818,8 @@ function applyProjectState(nextProject, options = {}) {
     cancelInteractionRuns();
     clearConditionMatchState();
     clearRuntimeDebugEvents({ silent: true });
+    clearRuntimeVariableHistory({ silent: true });
+    clearRuntimePerformanceHistory({ silent: true });
     resetWidgetRuntimeState();
     resetRuntimeVariables();
     clearLinkedWidgetState();
@@ -3613,7 +4884,7 @@ function openProjectRecord(recordId, options = {}) {
 
     activeProjectRecordId.value = record.id;
     persistProjectLibraryState(projectLibrary.value, record.id);
-    applyProjectState(JSON.parse(record.snapshot), {
+    applyProjectState(hydrateProjectSourceSecrets(JSON.parse(record.snapshot), record.id), {
         closeDialog: options.closeDialog,
         statusMessage: options.statusMessage ?? `已打开项目：${record.name}`,
     });
@@ -3670,6 +4941,8 @@ function duplicateProjectRecord(recordId) {
         name: `${record.name} 副本`,
     });
 
+    copyProjectSourceSecrets(record.id, duplicated.id);
+
     projectLibrary.value = [duplicated, ...projectLibrary.value];
     persistProjectLibraryState(
         projectLibrary.value,
@@ -3707,9 +4980,12 @@ function createBlankProjectRecord() {
     projectLibrary.value = [record, ...projectLibrary.value];
     activeProjectRecordId.value = record.id;
     persistProjectLibraryState(projectLibrary.value, record.id);
-    applyProjectState(JSON.parse(record.snapshot), {
-        statusMessage: `已创建项目：${record.name}`,
-    });
+    applyProjectState(
+        hydrateProjectSourceSecrets(JSON.parse(record.snapshot), record.id),
+        {
+            statusMessage: `已创建项目：${record.name}`,
+        },
+    );
 }
 
 function togglePreviewMode() {
@@ -3761,6 +5037,9 @@ function deleteProjectRecord(recordId) {
         (item) => item.id !== recordId,
     );
 
+    removeProjectSourceSecrets(record.id);
+    deletePublishedSnapshotsByProject(record.id);
+
     if (!remaining.length) {
         const fallbackRecord = buildProjectRecord(createBlankProjectState(), {
             name: "新建项目 1",
@@ -3769,10 +5048,16 @@ function deleteProjectRecord(recordId) {
         projectLibrary.value = [fallbackRecord];
         activeProjectRecordId.value = fallbackRecord.id;
         persistProjectLibraryState(projectLibrary.value, fallbackRecord.id);
-        applyProjectState(JSON.parse(fallbackRecord.snapshot), {
+        applyProjectState(
+            hydrateProjectSourceSecrets(
+                JSON.parse(fallbackRecord.snapshot),
+                fallbackRecord.id,
+            ),
+            {
             closeDialog: false,
             statusMessage: `已删除项目：${record.name}`,
-        });
+            },
+        );
         return;
     }
 
@@ -3803,6 +5088,8 @@ function resetProject() {
     clipboardTemplate.value = null;
     clearConditionMatchState();
     clearRuntimeDebugEvents({ silent: true });
+    clearRuntimeVariableHistory({ silent: true });
+    clearRuntimePerformanceHistory({ silent: true });
     resetWidgetRuntimeState();
     resetRuntimeVariables();
     clearLinkedWidgetState();
@@ -3813,7 +5100,7 @@ function resetProject() {
 function openExportDialog() {
     dialogSourceId.value = "";
     dialogMode.value = "export";
-    dialogText.value = JSON.stringify(project.value, null, 2);
+    dialogText.value = buildProjectExportPayload(project.value);
 }
 
 function openImportDialog() {
@@ -3850,6 +5137,7 @@ function applyImport() {
         const nextProject = normalizeProjectSchema(
             JSON.parse(dialogText.value),
         );
+        rememberProjectSourceSecrets(activeProjectRecordId.value, nextProject);
         queueHistoryLabel("导入项目");
         project.value = nextProject;
         dialogMode.value = null;
@@ -3859,6 +5147,8 @@ function applyImport() {
         clipboardTemplate.value = null;
         clearConditionMatchState();
         clearRuntimeDebugEvents({ silent: true });
+        clearRuntimeVariableHistory({ silent: true });
+        clearRuntimePerformanceHistory({ silent: true });
         resetWidgetRuntimeState();
         resetRuntimeVariables();
         clearLinkedWidgetState();
@@ -4043,6 +5333,7 @@ function closeDialog() {
     dialogText.value = "";
     templateDraftName.value = "";
     projectDraftName.value = "";
+    publishedSnapshotDraftName.value = "";
     dialogSourceId.value = "";
 }
 
@@ -4065,7 +5356,15 @@ async function restoreHistoryEntry(entry) {
     cancelInteractivePageInitialization();
     clearConditionMatchState();
     resetWidgetRuntimeState();
-    resetRuntimeVariables();
+    if (previewMode.value || isRuntimeMode.value) {
+        startRuntimeVariableSession({
+            sourceLabel: "历史快照",
+        });
+    } else {
+        clearRuntimeVariableHistory({ silent: true });
+        clearRuntimePerformanceHistory({ silent: true });
+        resetRuntimeVariables();
+    }
     resetRuntimeFilters();
     clearLinkedWidgetState();
     await nextTick();
@@ -4159,7 +5458,9 @@ function moveSelectionBy(deltaX, deltaY) {
     });
 }
 
-async function executeInteractionAction(widget, action) {
+async function executeInteractionAction(widget, action, options = {}) {
+    const runContext = options.runContext ?? null;
+
     switch (action.action) {
         case "highlight-widgets": {
             const targetIds = action.targetWidgetIds ?? [];
@@ -4184,13 +5485,22 @@ async function executeInteractionAction(widget, action) {
                 : fallbackSourceId
                   ? [fallbackSourceId]
                   : [];
+            let refreshCount = 0;
 
-            const results = await Promise.all(
-                targetSourceIds.map((sourceId) =>
-                    refreshDataSource(sourceId, { silent: true }),
-                ),
-            );
-            const refreshCount = results.filter(Boolean).length;
+            for (const sourceId of targetSourceIds) {
+                const refreshed = await refreshDataSource(sourceId, {
+                    silent: true,
+                    runContext,
+                });
+
+                if (refreshed) {
+                    refreshCount += 1;
+                }
+
+                if (runContext?.blocked) {
+                    return false;
+                }
+            }
 
             if (refreshCount > 0) {
                 statusMessage.value = `已联动刷新 ${refreshCount} 个数据源`;
@@ -4309,9 +5619,18 @@ async function executeInteractionAction(widget, action) {
                 syncRuntimeFiltersToWidgets();
             }
 
-            await triggerConditionMatchInteractions(getActiveInteractivePageId(), {
-                reason: "widget-props-patch",
-            });
+            await triggerConditionMatchInteractions(
+                getActiveInteractivePageId(),
+                {
+                    reason: "widget-props-patch",
+                    runContext,
+                },
+            );
+
+            if (runContext?.blocked) {
+                return false;
+            }
+
             statusMessage.value = `已更新 ${targetIds.length} 个组件属性`;
             pushRuntimeDebugEvent({
                 level: "success",
@@ -4336,15 +5655,29 @@ async function executeInteractionAction(widget, action) {
                 typeof resolvedValue === "string"
                     ? normalizeConditionOperand(resolvedValue)
                     : resolvedValue;
-            const updated = setRuntimeVariable(variableKey, nextValue);
+            const variableResult = setRuntimeVariable(variableKey, nextValue, {
+                recordHistory: true,
+                sourceLabel: widget.name || "交互动作",
+                widgetName: widget.name,
+                pageName: currentPage.value?.name ?? "",
+            });
 
-            if (!updated) {
+            if (!variableResult.updated || !variableResult.changed) {
                 return false;
             }
 
-            await triggerConditionMatchInteractions(getActiveInteractivePageId(), {
-                reason: "runtime-variable-set",
-            });
+            await triggerConditionMatchInteractions(
+                getActiveInteractivePageId(),
+                {
+                    reason: "runtime-variable-set",
+                    runContext,
+                },
+            );
+
+            if (runContext?.blocked) {
+                return false;
+            }
+
             statusMessage.value = `已设置运行时变量 ${variableKey}`;
             pushRuntimeDebugEvent({
                 level: "success",
@@ -4367,10 +5700,30 @@ async function runWidgetActions(widget, options = {}) {
           );
 
     if (!actions.length) {
-        return;
+        return {
+            actionCount: 0,
+            executedCount: 0,
+            skippedCount: 0,
+            successCount: 0,
+            cancelled: false,
+            duration: 0,
+        };
     }
 
     const token = options.token ?? interactionRunToken;
+    const runContext =
+        options.runContext ??
+        createInteractionRunContext({
+            sourceLabel:
+                options.sourceLabel ??
+                getInteractionTriggerLabel(widget.interaction?.trigger || "click"),
+        });
+    const actionRunStartedAt = Date.now();
+    const performancePageId = options.pageId ?? currentPageId.value;
+    const performancePageName = options.pageName ?? currentPage.value?.name ?? "";
+    let executedCount = 0;
+    let skippedCount = 0;
+    let successCount = 0;
 
     for (const action of actions) {
         const canContinue = await waitForInteractionDelay(
@@ -4379,7 +5732,41 @@ async function runWidgetActions(widget, options = {}) {
         );
 
         if (!canContinue) {
-            return;
+            const cancelledResult = {
+                actionCount: actions.length,
+                executedCount,
+                skippedCount,
+                successCount,
+                cancelled: true,
+                duration: Date.now() - actionRunStartedAt,
+            };
+
+            if (
+                options.recordPerformance !== false &&
+                (executedCount > 0 || skippedCount > 0 || options.forcePerformance)
+            ) {
+                pushRuntimePerformanceEntry({
+                    type: "interaction-chain",
+                    duration: cancelledResult.duration,
+                    sourceLabel:
+                        options.sourceLabel ??
+                        getInteractionTriggerLabel(
+                            widget.interaction?.trigger || "click",
+                        ),
+                    detail: "执行过程中被中断",
+                    pageId: performancePageId,
+                    pageName: performancePageName,
+                    widgetId: widget.id,
+                    widgetName: widget.name,
+                    actionCount: actions.length,
+                    executedCount,
+                    skippedCount,
+                    successCount,
+                    cancelled: true,
+                });
+            }
+
+            return cancelledResult;
         }
 
         if (!options.skipConditionEvaluation) {
@@ -4389,12 +5776,81 @@ async function runWidgetActions(widget, options = {}) {
             );
 
             if (!conditionResult.matched) {
+                skippedCount += 1;
                 continue;
             }
         }
 
-        await executeInteractionAction(widget, action);
+        const stepGuard = enterInteractionRunStep(
+            runContext,
+            widget,
+            action,
+            performancePageId,
+        );
+
+        if (!stepGuard.ok) {
+            skippedCount += 1;
+            break;
+        }
+
+        executedCount += 1;
+        let actionSucceeded = false;
+
+        try {
+            actionSucceeded = await executeInteractionAction(widget, action, {
+                runContext,
+            });
+        } finally {
+            stepGuard.release();
+        }
+
+        if (actionSucceeded) {
+            successCount += 1;
+        }
+
+        if (runContext.blocked) {
+            break;
+        }
     }
+
+    const completedResult = {
+        actionCount: actions.length,
+        executedCount,
+        skippedCount,
+        successCount,
+        cancelled: false,
+        duration: Date.now() - actionRunStartedAt,
+        blocked: runContext.blocked,
+        blockedReason: runContext.blockedReason,
+    };
+
+    if (
+        options.recordPerformance !== false &&
+        (executedCount > 0 || skippedCount > 0 || options.forcePerformance)
+    ) {
+        pushRuntimePerformanceEntry({
+            type: "interaction-chain",
+            duration: completedResult.duration,
+            sourceLabel:
+                options.sourceLabel ??
+                getInteractionTriggerLabel(widget.interaction?.trigger || "click"),
+            detail: runContext.blocked
+                ? `执行已中止 · ${successCount} 个动作生效 / ${skippedCount} 个条件跳过`
+                : `${successCount} 个动作生效 / ${skippedCount} 个条件跳过`,
+            pageId: performancePageId,
+            pageName: performancePageName,
+            widgetId: widget.id,
+            widgetName: widget.name,
+            actionCount: actions.length,
+            executedCount,
+            skippedCount,
+            successCount,
+            failureCount: Math.max(executedCount - successCount, 0),
+            blocked: runContext.blocked,
+        });
+    }
+
+    return completedResult;
 }
 
 async function triggerPageEnterInteractions(pageId = currentPageId.value) {
@@ -4420,7 +5876,13 @@ async function triggerPageEnterInteractions(pageId = currentPageId.value) {
     const token = interactionRunToken;
 
     for (const widget of widgets) {
-        await runWidgetActions(widget, { token });
+        await runWidgetActions(widget, {
+            token,
+            sourceLabel: "页面进入",
+            runContext: createInteractionRunContext({
+                sourceLabel: "页面进入",
+            }),
+        });
     }
 }
 
@@ -4455,8 +5917,17 @@ async function triggerConditionMatchInteractions(
     }
 
     const token = options.token ?? interactionRunToken;
+    const runContext =
+        options.runContext ??
+        createInteractionRunContext({
+            sourceLabel: options.sourceLabel ?? "条件联动",
+        });
 
     for (const widget of widgets) {
+        if (runContext.blocked) {
+            return;
+        }
+
         const matchedActions = [];
 
         getInteractionActions(widget.interaction)
@@ -4512,6 +5983,8 @@ async function triggerConditionMatchInteractions(
             token,
             actions: matchedActions,
             skipConditionEvaluation: true,
+            sourceLabel: "条件命中",
+            runContext,
         });
     }
 }
@@ -4534,8 +6007,13 @@ async function handleWidgetAction(widgetId) {
         title: "触发组件动作",
         detail: widget.name,
     });
+    const runContext = createInteractionRunContext({
+        sourceLabel: "组件点击",
+    });
     await runWidgetActions(widget, {
         token: interactionRunToken,
+        sourceLabel: "组件点击",
+        runContext,
     });
 }
 
@@ -4784,7 +6262,15 @@ watch(previewMode, (enabled) => {
     cancelInteractivePageInitialization();
     clearConditionMatchState();
     resetWidgetRuntimeState();
-    resetRuntimeVariables();
+    if (enabled) {
+        startRuntimeVariableSession({
+            sourceLabel: "预览会话",
+        });
+    } else {
+        clearRuntimeVariableHistory({ silent: true });
+        clearRuntimePerformanceHistory({ silent: true });
+        resetRuntimeVariables();
+    }
     resetRuntimeFilters();
     clearLinkedWidgetState();
     syncSourceRefreshTimers();
@@ -4800,11 +6286,22 @@ watch(previewMode, (enabled) => {
 });
 
 onMounted(() => {
+    if (
+        initialRoute.mode === "runtime" &&
+        initialRoute.publishId &&
+        !shouldUsePublishedRuntime
+    ) {
+        statusMessage.value = "发布快照不存在，已返回编辑器";
+        syncRoute();
+    }
+
     if (isRuntimeMode.value) {
         runtimePageId.value = currentPageId.value;
         clearConditionMatchState();
         resetWidgetRuntimeState();
-        resetRuntimeVariables();
+        startRuntimeVariableSession({
+            sourceLabel: "运行页会话",
+        });
         resetRuntimeFilters();
         syncSourceRefreshTimers();
         void initializeInteractivePage(runtimePageId.value);
@@ -4846,6 +6343,7 @@ onBeforeUnmount(() => {
             @toggle-preview="togglePreviewMode"
             @open-runtime="openRuntimeWorkspace"
             @copy-runtime-link="copyRuntimeLink"
+            @open-publish-manager="openPublishManagerDialog"
             @open-project-manager="openProjectManagerDialog"
             @save-project-copy="openProjectSaveDialog"
             @select-page="navigateToPage"
@@ -4879,6 +6377,8 @@ onBeforeUnmount(() => {
             :debug-summary="runtimeDebugSummary"
             :debug-filters="runtimeDebugFilters"
             :debug-variables="runtimeDebugVariables"
+            :debug-variable-history="runtimeDebugVariableHistory"
+            :debug-performance="runtimeDebugPerformance"
             :debug-sources="runtimeDebugSources"
             :debug-events="runtimeDebugEvents"
             @select-page="navigateToPage"
@@ -4888,6 +6388,8 @@ onBeforeUnmount(() => {
             @clear-debug-events="clearRuntimeDebugEvents"
             @reset-runtime-variables="resetRuntimeVariablesToPresets"
             @clear-runtime-variables="clearRuntimeVariablesForSession"
+            @clear-runtime-variable-history="clearRuntimeVariableHistoryForSession"
+            @clear-runtime-performance-history="clearRuntimePerformanceHistoryForSession"
             @trigger-widget-action="handleWidgetAction"
             @widget-command="handleWidgetCommand"
         />
@@ -5098,6 +6600,102 @@ onBeforeUnmount(() => {
                             确认导入
                         </button>
                     </div>
+                </template>
+
+                <template v-else-if="dialogMode === 'project-publish'">
+                    <div class="dialog-card__header">
+                        <div>
+                            <p>发布中心</p>
+                            <h3>生成冻结快照并复制独立运行链接</h3>
+                        </div>
+                        <button class="ghost" @click="closeDialog">关闭</button>
+                    </div>
+
+                    <label class="dialog-card__field">
+                        <span>发布名称</span>
+                        <input
+                            v-model="publishedSnapshotDraftName"
+                            type="text"
+                            placeholder="请输入发布版本名称"
+                        />
+                    </label>
+
+                    <div class="dialog-card__summary">
+                        <span>当前发布入口</span>
+                        <strong>
+                            {{ currentPage?.name || "未命名页面" }} ·
+                            {{ project.pages.length }} 个页面 /
+                            {{ project.dataSources.length }} 个数据源
+                        </strong>
+                    </div>
+
+                    <p class="inspector-tip">
+                        发布快照会冻结当前画布结构与默认数据源配置，后续编辑不会影响已发布版本；
+                        鉴权密钥不会写入发布内容。
+                    </p>
+
+                    <div
+                        class="dialog-card__actions dialog-card__actions--split"
+                    >
+                        <button
+                            class="ghost"
+                            @click="
+                                publishedSnapshotDraftName =
+                                    buildPublishedSnapshotDraftName()
+                            "
+                        >
+                            重置名称
+                        </button>
+                        <button class="primary" @click="publishCurrentProjectSnapshot">
+                            生成发布快照
+                        </button>
+                    </div>
+
+                    <div v-if="currentProjectPublishedSnapshots.length" class="project-library">
+                        <article
+                            v-for="snapshot in currentProjectPublishedSnapshots"
+                            :key="snapshot.id"
+                            class="project-library__item"
+                        >
+                            <div class="project-library__meta">
+                                <strong>{{ snapshot.name }}</strong>
+                                <span>
+                                    {{ snapshot.pageName }} ·
+                                    {{
+                                        new Date(snapshot.updatedAt).toLocaleString(
+                                            "zh-CN",
+                                            { hour12: false },
+                                        )
+                                    }}
+                                </span>
+                            </div>
+
+                            <div class="project-library__actions">
+                                <button
+                                    class="ghost"
+                                    @click="copyPublishedSnapshotLink(snapshot.id)"
+                                >
+                                    复制链接
+                                </button>
+                                <button
+                                    class="ghost"
+                                    @click="activatePublishedRuntime(snapshot.id)"
+                                >
+                                    打开运行态
+                                </button>
+                                <button
+                                    class="ghost danger"
+                                    @click="deletePublishedSnapshot(snapshot.id)"
+                                >
+                                    删除
+                                </button>
+                            </div>
+                        </article>
+                    </div>
+
+                    <p v-else class="inspector-tip">
+                        当前项目还没有发布快照，先生成一个版本即可。
+                    </p>
                 </template>
 
                 <template v-else-if="dialogMode === 'project-library'">

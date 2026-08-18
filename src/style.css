@@ -765,6 +765,8 @@ button:disabled {
 }
 
 .runtime-debug__chip-list,
+.runtime-debug__history-list,
+.runtime-debug__performance-list,
 .runtime-debug__source-list,
 .runtime-debug__event-list {
     display: grid;
@@ -798,6 +800,8 @@ button:disabled {
     word-break: break-word;
 }
 
+.runtime-debug__history,
+.runtime-debug__performance,
 .runtime-debug__source,
 .runtime-debug__event {
     display: grid;
@@ -808,21 +812,28 @@ button:disabled {
     background: rgba(8, 19, 35, 0.68);
 }
 
+.runtime-debug__performance.is-error,
 .runtime-debug__source.is-error,
 .runtime-debug__event.is-error {
     border-color: rgba(255, 134, 110, 0.24);
     background: rgba(40, 14, 18, 0.58);
 }
 
+.runtime-debug__history.is-success,
+.runtime-debug__performance.is-success,
 .runtime-debug__event.is-success {
     border-color: rgba(121, 255, 179, 0.2);
 }
 
+.runtime-debug__history.is-warning,
+.runtime-debug__performance.is-warning,
 .runtime-debug__event.is-warning {
     border-color: rgba(255, 201, 117, 0.22);
     background: rgba(37, 25, 8, 0.48);
 }
 
+.runtime-debug__history-head,
+.runtime-debug__performance-head,
 .runtime-debug__source-head,
 .runtime-debug__event-head {
     display: flex;
@@ -831,6 +842,8 @@ button:disabled {
     gap: 10px;
 }
 
+.runtime-debug__history-head span,
+.runtime-debug__performance-head span,
 .runtime-debug__source-head span,
 .runtime-debug__event-head span {
     padding: 2px 8px;
@@ -840,20 +853,220 @@ button:disabled {
     font-size: 10px;
 }
 
+.runtime-debug__performance.is-error .runtime-debug__performance-head span,
 .runtime-debug__source.is-error .runtime-debug__source-head span,
 .runtime-debug__event.is-error .runtime-debug__event-head span {
     background: rgba(255, 134, 110, 0.16);
     color: #ffd3cb;
 }
 
+.runtime-debug__history.is-success .runtime-debug__history-head span,
+.runtime-debug__performance.is-success .runtime-debug__performance-head span,
 .runtime-debug__event.is-success .runtime-debug__event-head span {
     background: rgba(121, 255, 179, 0.14);
     color: #ccffe4;
 }
 
+.runtime-debug__history.is-warning .runtime-debug__history-head span,
+.runtime-debug__performance.is-warning .runtime-debug__performance-head span,
 .runtime-debug__event.is-warning .runtime-debug__event-head span {
     background: rgba(255, 201, 117, 0.16);
     color: #ffe2ae;
+}
+
+.runtime-debug__performance-overview {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.runtime-debug__performance-toolbar {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.runtime-debug__filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.runtime-debug__filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 0 10px;
+    border: 1px solid rgba(72, 220, 255, 0.12);
+    border-radius: 999px;
+    background: rgba(10, 22, 40, 0.7);
+    color: rgba(235, 247, 255, 0.78);
+    font-size: 12px;
+    transition:
+        border-color 160ms ease,
+        background 160ms ease,
+        color 160ms ease;
+}
+
+.runtime-debug__filter-chip small {
+    color: rgba(235, 247, 255, 0.54);
+    font-size: 11px;
+}
+
+.runtime-debug__filter-chip:hover {
+    border-color: rgba(72, 220, 255, 0.22);
+    background: rgba(12, 27, 46, 0.84);
+}
+
+.runtime-debug__filter-chip.is-active {
+    border-color: rgba(72, 220, 255, 0.28);
+    background: rgba(18, 48, 80, 0.92);
+    color: #eff8ff;
+}
+
+.runtime-debug__filter-chip.is-active small {
+    color: rgba(239, 248, 255, 0.72);
+}
+
+.runtime-debug__filter-chip--duration {
+    border-color: rgba(255, 201, 117, 0.12);
+    background: rgba(34, 24, 10, 0.52);
+}
+
+.runtime-debug__filter-chip--duration:hover {
+    border-color: rgba(255, 201, 117, 0.24);
+    background: rgba(44, 30, 12, 0.72);
+}
+
+.runtime-debug__filter-chip--duration.is-active {
+    border-color: rgba(255, 201, 117, 0.28);
+    background: rgba(70, 44, 12, 0.84);
+}
+
+.runtime-debug__performance-pill {
+    display: grid;
+    gap: 4px;
+    padding: 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(72, 220, 255, 0.08);
+    background: rgba(12, 26, 44, 0.74);
+}
+
+.runtime-debug__performance-pill span {
+    color: rgba(235, 247, 255, 0.58);
+    font-size: 11px;
+}
+
+.runtime-debug__performance-pill strong {
+    color: #ebf7ff;
+    font-size: 15px;
+    letter-spacing: 0.02em;
+}
+
+.runtime-debug__performance-ranking {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.runtime-debug__performance-subhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.runtime-debug__performance-subhead span {
+    color: rgba(235, 247, 255, 0.62);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.runtime-debug__performance-rank {
+    display: grid;
+    gap: 4px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(72, 220, 255, 0.08);
+    background: rgba(11, 24, 41, 0.72);
+}
+
+.runtime-debug__performance-rank-head,
+.runtime-debug__performance-head-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.runtime-debug__performance-rank strong {
+    color: #ebf7ff;
+    font-size: 12px;
+}
+
+.runtime-debug__performance-tag {
+    display: inline-flex;
+    align-items: center;
+    min-height: 20px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgba(255, 201, 117, 0.14);
+    color: #ffe2ae;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+.runtime-debug__performance.is-error .runtime-debug__performance-tag {
+    background: rgba(255, 134, 110, 0.16);
+    color: #ffd3cb;
+}
+
+.runtime-debug__performance-rank span,
+.runtime-debug__performance-rank small {
+    color: var(--text-2);
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.runtime-debug__history-summary,
+.runtime-debug__history-meta,
+.runtime-debug__performance-summary,
+.runtime-debug__performance-meta {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.runtime-debug__history-change {
+    display: grid;
+    gap: 8px;
+}
+
+.runtime-debug__history-value {
+    display: grid;
+    gap: 4px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(72, 220, 255, 0.06);
+    border: 1px solid rgba(72, 220, 255, 0.08);
+}
+
+.runtime-debug__history-value span {
+    color: rgba(235, 247, 255, 0.56);
+    font-size: 11px;
+}
+
+.runtime-debug__history-value em {
+    color: #d8f6ff;
+    font-size: 12px;
+    font-style: normal;
+    line-height: 1.55;
+    word-break: break-word;
 }
 
 .runtime-debug__source em {
@@ -5313,6 +5526,14 @@ button.interaction-edge__target:hover {
 
     .runtime-debug__section-actions {
         justify-content: flex-start;
+    }
+
+    .runtime-debug__performance-overview {
+        grid-template-columns: 1fr;
+    }
+
+    .runtime-debug__filter-row {
+        width: 100%;
     }
 
     .interaction-overview__focus-grid {

@@ -68,6 +68,7 @@ defineEmits([
     "toggle-preview",
     "open-runtime",
     "copy-runtime-link",
+    "open-publish-manager",
     "open-project-manager",
     "save-project-copy",
     "select-page",
@@ -243,6 +244,12 @@ const pageCountLabel = computed(() => `${props.pages.length} 个页面`);
                 <div
                     class="toolbar__action-group toolbar__action-group--utility"
                 >
+                    <button
+                        class="ghost"
+                        @click="$emit('open-publish-manager')"
+                    >
+                        发布中心
+                    </button>
                     <button
                         class="ghost"
                         @click="$emit('open-project-manager')"
