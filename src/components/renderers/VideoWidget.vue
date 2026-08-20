@@ -1,5 +1,6 @@
 <script setup>
-import { computed } from "vue";
+import { computed, inject } from "vue";
+import { parseAssetReference } from "../../editor/assets";
 
 const props = defineProps({
     widget: {
@@ -8,9 +9,17 @@ const props = defineProps({
     },
 });
 
-const videoSrc = computed(() => String(props.widget.props.src || "").trim());
+const resolveAssetReference = inject(
+    "resolveAssetReference",
+    (value) => String(value || "").trim(),
+);
+const rawVideoSrc = computed(() => String(props.widget.props.src || "").trim());
+const videoSrc = computed(() => resolveAssetReference(rawVideoSrc.value));
 const posterSrc = computed(() =>
-    String(props.widget.props.poster || "").trim(),
+    resolveAssetReference(String(props.widget.props.poster || "").trim()),
+);
+const isAssetReference = computed(() =>
+    Boolean(parseAssetReference(rawVideoSrc.value)),
 );
 const title = computed(() => String(props.widget.props.title || "").trim());
 const objectFit = computed(
@@ -44,7 +53,11 @@ const mediaStyle = computed(() => ({
         </div>
 
         <div v-else class="widget-media__empty">
-            请先配置视频地址，或绑定视频数据源。
+            {{
+                isAssetReference
+                    ? "本地视频资源不存在、已删除或尚未完成加载。"
+                    : "请先配置视频地址，或绑定视频数据源。"
+            }}
         </div>
     </div>
 </template>

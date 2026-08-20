@@ -1,5 +1,6 @@
 <script setup>
-import { computed } from "vue";
+import { computed, inject } from "vue";
+import { parseAssetReference } from "../../editor/assets";
 
 const props = defineProps({
     widget: {
@@ -8,7 +9,15 @@ const props = defineProps({
     },
 });
 
-const imageSrc = computed(() => String(props.widget.props.src || "").trim());
+const resolveAssetReference = inject(
+    "resolveAssetReference",
+    (value) => String(value || "").trim(),
+);
+const rawImageSrc = computed(() => String(props.widget.props.src || "").trim());
+const isAssetReference = computed(() =>
+    Boolean(parseAssetReference(rawImageSrc.value)),
+);
+const imageSrc = computed(() => resolveAssetReference(rawImageSrc.value));
 const altText = computed(() =>
     String(props.widget.props.alt || props.widget.name || "").trim(),
 );
@@ -42,7 +51,11 @@ const mediaStyle = computed(() => ({
         </div>
 
         <div v-else class="widget-media__empty">
-            请先配置图片地址，或绑定图片数据源。
+            {{
+                isAssetReference
+                    ? "本地图片资源不存在、已删除或尚未完成加载。"
+                    : "请先配置图片地址，或绑定图片数据源。"
+            }}
         </div>
     </div>
 </template>

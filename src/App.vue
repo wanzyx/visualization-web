@@ -4,6 +4,7 @@ import {
     nextTick,
     onBeforeUnmount,
     onMounted,
+    provide,
     ref,
     watch,
 } from "vue";
@@ -13,6 +14,20 @@ import StageCanvas from "./components/StageCanvas.vue";
 import InspectorPanel from "./components/InspectorPanel.vue";
 import TopToolbar from "./components/TopToolbar.vue";
 import { materials, createWidget } from "./editor/materials";
+import {
+    ASSET_KIND_OPTIONS,
+    createAssetId,
+    deserializeAssetPackageRecords,
+    createAssetReference,
+    deleteAssetRecord,
+    formatAssetFileSize,
+    inferAssetKind,
+    listAssetRecords,
+    normalizeAssetTags,
+    parseAssetReference,
+    putAssetRecords,
+    serializeAssetRecords,
+} from "./editor/assets";
 import {
     createDataSource,
     createDataSourceRequestConfig,
@@ -58,6 +73,8 @@ const LINKED_WIDGET_DURATION = 1800;
 const RUNTIME_DEBUG_EVENT_LIMIT = 80;
 const RUNTIME_VARIABLE_HISTORY_LIMIT = 80;
 const RUNTIME_PERFORMANCE_LIMIT = 80;
+const PUBLISHED_ROLLBACK_LOG_LIMIT = 40;
+const PUBLISHED_OPERATION_LOG_LIMIT = 120;
 const INTERACTION_CHAIN_MAX_DEPTH = 12;
 const INTERACTION_CHAIN_MAX_STEPS = 60;
 const INTERACTION_CHAIN_REPEAT_LIMIT = 2;
@@ -96,17 +113,115 @@ const PROJECT_LIBRARY_STORAGE_KEY = "visualization-web-project-library-v1";
 const ACTIVE_PROJECT_STORAGE_KEY = "visualization-web-active-project-v1";
 const DATA_SOURCE_SECRET_STORAGE_KEY = "visualization-web-source-secrets-v1";
 const PUBLISHED_SNAPSHOT_STORAGE_KEY = "visualization-web-published-snapshots-v1";
+const PUBLISHED_ROLLBACK_LOG_STORAGE_KEY =
+    "visualization-web-published-rollback-logs-v1";
+const PUBLISHED_OPERATION_LOG_STORAGE_KEY =
+    "visualization-web-published-operation-logs-v1";
+const PROJECT_EXPORT_PACKAGE_TYPE = "visualization-web-project-package";
+const PROJECT_EXPORT_PACKAGE_VERSION = 2;
+const ASSET_BATCH_TAG_MODE_OPTIONS = [
+    { value: "append", label: "追加标签" },
+    { value: "replace", label: "覆盖标签" },
+    { value: "clear", label: "清空标签" },
+];
+const ASSET_LIBRARY_VIEW_MODE_OPTIONS = [
+    { value: "list", label: "列表视图" },
+    { value: "grouped", label: "标签分组" },
+];
 const DATA_SOURCE_SECRET_FIELDS = [
     "authToken",
     "authUsername",
     "authPassword",
 ];
+const PUBLISHED_ENVIRONMENT_OPTIONS = [
+    { value: "production", label: "生产环境" },
+    { value: "staging", label: "预发环境" },
+    { value: "testing", label: "测试环境" },
+    { value: "development", label: "开发环境" },
+];
+const PUBLISHED_ENVIRONMENT_LABEL_MAP = Object.fromEntries(
+    PUBLISHED_ENVIRONMENT_OPTIONS.map((item) => [item.value, item.label]),
+);
+const DEFAULT_PUBLISHED_ENVIRONMENT = PUBLISHED_ENVIRONMENT_OPTIONS[0].value;
+const PUBLISHED_APPROVAL_STATUS_OPTIONS = [
+    { value: "pending", label: "待审批" },
+    { value: "approved", label: "已通过" },
+    { value: "rejected", label: "已驳回" },
+];
+const PUBLISHED_APPROVAL_STATUS_LABEL_MAP = Object.fromEntries(
+    PUBLISHED_APPROVAL_STATUS_OPTIONS.map((item) => [item.value, item.label]),
+);
+const DEFAULT_PUBLISHED_APPROVAL_STATUS = "approved";
+const PUBLISHED_APPROVAL_HISTORY_LIMIT = 20;
+const PUBLISHED_APPROVAL_REVIEWER_FILTER_UNASSIGNED = "__unassigned__";
+const PUBLISHED_APPROVAL_FILTER_OPTIONS = [
+    { value: "all", label: "全部审批" },
+    ...PUBLISHED_APPROVAL_STATUS_OPTIONS,
+];
+const PUBLISHED_LOCK_FILTER_OPTIONS = [
+    { value: "all", label: "全部状态" },
+    { value: "locked", label: "仅锁定" },
+    { value: "unlocked", label: "仅未锁定" },
+];
+const PUBLISHED_ROLLBACK_RELATION_FILTER_OPTIONS = [
+    { value: "all", label: "全部关联" },
+    { value: "linked", label: "仅可定位" },
+    { value: "missing", label: "仅已失效" },
+];
+const PUBLISHED_OPERATION_ACTION_LABEL_MAP = {
+    publish: "生成发布",
+    "update-meta": "更新信息",
+    overwrite: "覆盖发布",
+    pin: "置顶版本",
+    unpin: "取消置顶",
+    lock: "锁定版本",
+    unlock: "解除锁定",
+    rollback: "回滚编辑器",
+    delete: "删除版本",
+    import: "导入版本",
+    "export-current": "导出当前项目",
+    "export-selected": "导出所选版本",
+    "export-operation-logs": "导出操作日志",
+    approve: "审批通过",
+    reject: "审批驳回",
+    "copy-link": "复制链接",
+    "open-runtime": "打开运行态",
+    "batch-pin": "批量置顶",
+    "batch-unpin": "批量取消置顶",
+    "batch-lock": "批量锁定",
+    "batch-unlock": "批量解除锁定",
+    "batch-delete": "批量删除",
+    "batch-copy-links": "批量复制链接",
+    "batch-open-runtimes": "批量打开运行态",
+    "batch-update-meta": "批量更新信息",
+    "batch-approve": "批量审批通过",
+    "batch-reject": "批量审批驳回",
+};
+const PUBLISHED_OPERATION_ACTION_FILTER_OPTIONS = [
+    { value: "all", label: "全部操作" },
+    ...Object.entries(PUBLISHED_OPERATION_ACTION_LABEL_MAP).map(
+        ([value, label]) => ({
+            value,
+            label,
+        }),
+    ),
+];
+const PUBLISHED_SORT_OPTIONS = [
+    { value: "pinned-latest", label: "置顶后按最近发布" },
+    { value: "pinned-oldest", label: "置顶后按最早发布" },
+    { value: "pinned-name", label: "置顶后按名称" },
+];
+const MATERIAL_LABEL_MAP = Object.fromEntries(
+    materials.map((item) => [item.type, item.label]),
+);
 
 let dataSourceSecretStoreState = loadDataSourceSecretStore();
 
 const initialRoute = getInitialRouteState();
 const initialProjectState = loadProjectState();
 const initialPublishedSnapshots = loadPublishedSnapshotLibrary();
+const initialPublishedRollbackLogs = loadPublishedRollbackLogLibrary();
+const initialPublishedOperationLogs = loadPublishedOperationLogLibrary();
 const initialPublishedRuntimeState = resolvePublishedRuntimeState(
     initialRoute,
     initialPublishedSnapshots,
@@ -132,13 +247,61 @@ const templateDraftName = ref("");
 const projectDraftName = ref("");
 const publishedSnapshotDraftName = ref("");
 const publishedSnapshotDraftNote = ref("");
+const publishedSnapshotDraftEnvironment = ref(DEFAULT_PUBLISHED_ENVIRONMENT);
+const publishedSnapshotDraftApprovalStatus = ref(
+    DEFAULT_PUBLISHED_APPROVAL_STATUS,
+);
+const publishedSnapshotDraftApprovalReviewer = ref("");
+const publishedSnapshotDraftApprovalComment = ref("");
+const publishedSnapshotDraftTags = ref("");
+const publishedSnapshotSearchKeyword = ref("");
+const publishedSnapshotFilterEnvironment = ref("all");
+const publishedSnapshotFilterApprovalStatus = ref("all");
+const publishedSnapshotFilterApprovalReviewer = ref("all");
+const publishedSnapshotFilterLockState = ref("all");
+const publishedSnapshotSortMode = ref(PUBLISHED_SORT_OPTIONS[0].value);
+const publishedSnapshotBatchApplyNote = ref(false);
+const publishedSnapshotBatchApplyTags = ref(false);
+const publishedSnapshotBatchApplyEnvironment = ref(false);
+const publishedSnapshotBatchApplyApprovalStatus = ref(false);
+const publishedRollbackSearchKeyword = ref("");
+const publishedRollbackFilterEnvironment = ref("all");
+const publishedRollbackFilterRelation = ref("all");
+const publishedOperationSearchKeyword = ref("");
+const publishedOperationFilterAction = ref("all");
+const editingPublishedSnapshotId = ref("");
+const publishDiffSnapshotId = ref("");
+const approvalTimelineSnapshotId = ref("");
+const pendingRollbackSnapshotId = ref("");
+const selectedPublishedSnapshotIds = ref([]);
 const dialogSourceId = ref("");
+const dialogOperationLogId = ref("");
 const statusMessage = ref("已启用多页面、模板库、数据源和事件联动");
+const assetLibrary = ref([]);
+const assetLibraryReady = ref(false);
+const assetLibraryLoading = ref(false);
+const assetLibrarySearchKeyword = ref("");
+const assetLibraryFilterKind = ref(ASSET_KIND_OPTIONS[0].value);
+const assetLibraryFilterTag = ref("all");
+const assetLibraryViewMode = ref(ASSET_LIBRARY_VIEW_MODE_OPTIONS[0].value);
+const assetLibraryUploadInputKey = ref(0);
+const selectedAssetIds = ref([]);
+const assetBatchTagMode = ref(ASSET_BATCH_TAG_MODE_OPTIONS[0].value);
+const assetBatchTagDraft = ref("");
+const collapsedAssetGroupKeys = ref([]);
+const expandedAssetUsageIds = ref([]);
+const assetEditingId = ref("");
+const assetDraftName = ref("");
+const assetTagEditingId = ref("");
+const assetTagDraftValue = ref("");
+const assetPreviewUrlMap = ref({});
 
 const project = ref(initialProject);
 const projectLibrary = ref(initialProjectState.library);
 const activeProjectRecordId = ref(initialProjectState.activeProjectId);
 const publishedSnapshots = ref(initialPublishedSnapshots);
+const publishedRollbackLogs = ref(initialPublishedRollbackLogs);
+const publishedOperationLogs = ref(initialPublishedOperationLogs);
 const templates = ref(loadTemplateLibrary());
 const dataSourceRuntime = ref({});
 const widgetRuntimeState = ref({});
@@ -164,11 +327,13 @@ const sourceRefreshTimers = new Map();
 const sourceRefreshRunState = new Map();
 const conditionMatchState = new Map();
 const interactionTimers = new Set();
+const assetObjectUrlRegistry = new Map();
 let linkedWidgetTimerId = 0;
 let projectSyncTimerId = 0;
 let interactionRunToken = 0;
 let interactivePageInitToken = 0;
 let interactionChainSeed = 0;
+let assetLibraryLoadToken = 0;
 let lastProjectSnapshot = JSON.stringify(project.value);
 
 const isRuntimeMode = computed(() => appMode.value === "runtime");
@@ -300,19 +465,1355 @@ const currentProjectName = computed(
         currentProjectRecord.value?.name ??
         deriveProjectRecordName(project.value),
 );
+function createEmptyAssetUsageDetail() {
+    return {
+        currentProjectUsed: 0,
+        currentProjectEntries: [],
+        currentProjectEntryCount: 0,
+        projectRecordEntries: [],
+        projectRecordCount: 0,
+        projectRecordEntryCount: 0,
+        publishedSnapshotEntries: [],
+        publishedSnapshotCount: 0,
+        publishedSnapshotEntryCount: 0,
+        total: 0,
+        totalEntries: 0,
+        totalScopes: 0,
+    };
+}
+
+function getAssetUsageScopeLabel(scopeType = "") {
+    switch (String(scopeType || "").trim()) {
+        case "current-project":
+            return "当前项目";
+        case "project-record":
+            return "项目快照";
+        case "published-snapshot":
+            return "发布版本";
+        default:
+            return "引用位置";
+    }
+}
+
+function getAssetUsageLocationLabel(locationType = "") {
+    switch (String(locationType || "").trim()) {
+        case "page":
+            return "页面设置";
+        case "source":
+            return "数据源";
+        case "variable":
+            return "变量模板";
+        default:
+            return "组件";
+    }
+}
+
+function parseProjectSnapshotForAssetUsage(snapshotText = "") {
+    if (typeof snapshotText !== "string" || !snapshotText.trim()) {
+        return null;
+    }
+
+    try {
+        return JSON.parse(snapshotText);
+    } catch (error) {
+        console.warn(error);
+        return null;
+    }
+}
+
+function createAssetUsageEntry(assetId, scopeMeta = {}, locationMeta = {}) {
+    const scopeType = String(scopeMeta.type || "").trim();
+    const locationType = String(locationMeta.locationType || "").trim();
+    const normalizedScopeLabel = getAssetUsageScopeLabel(scopeType);
+    const primaryLabel =
+        typeof locationMeta.primaryLabel === "string" &&
+        locationMeta.primaryLabel.trim()
+            ? locationMeta.primaryLabel.trim()
+            : "未命名引用";
+    const secondaryLabel =
+        typeof locationMeta.secondaryLabel === "string" &&
+        locationMeta.secondaryLabel.trim()
+            ? locationMeta.secondaryLabel.trim()
+            : normalizedScopeLabel;
+
+    return {
+        id: [
+            assetId,
+            scopeType || "scope",
+            scopeMeta.id || scopeMeta.name || "unknown",
+            locationType || "location",
+            locationMeta.pageId ||
+                locationMeta.widgetId ||
+                locationMeta.sourceId ||
+                locationMeta.variableKey ||
+                primaryLabel,
+        ].join(":"),
+        assetId,
+        scopeType,
+        scopeLabel: normalizedScopeLabel,
+        scopeId: String(scopeMeta.id || "").trim(),
+        scopeName:
+            typeof scopeMeta.name === "string" && scopeMeta.name.trim()
+                ? scopeMeta.name.trim()
+                : normalizedScopeLabel,
+        locationType,
+        locationTypeLabel: getAssetUsageLocationLabel(locationType),
+        pageId: String(locationMeta.pageId || "").trim(),
+        pageName:
+            typeof locationMeta.pageName === "string" &&
+            locationMeta.pageName.trim()
+                ? locationMeta.pageName.trim()
+                : "",
+        widgetId: String(locationMeta.widgetId || "").trim(),
+        widgetName:
+            typeof locationMeta.widgetName === "string" &&
+            locationMeta.widgetName.trim()
+                ? locationMeta.widgetName.trim()
+                : "",
+        widgetType: String(locationMeta.widgetType || "").trim(),
+        widgetTypeLabel:
+            typeof locationMeta.widgetTypeLabel === "string" &&
+            locationMeta.widgetTypeLabel.trim()
+                ? locationMeta.widgetTypeLabel.trim()
+                : "",
+        sourceId: String(locationMeta.sourceId || "").trim(),
+        sourceName:
+            typeof locationMeta.sourceName === "string" &&
+            locationMeta.sourceName.trim()
+                ? locationMeta.sourceName.trim()
+                : "",
+        variableKey:
+            typeof locationMeta.variableKey === "string" &&
+            locationMeta.variableKey.trim()
+                ? locationMeta.variableKey.trim()
+                : "",
+        primaryLabel,
+        secondaryLabel,
+    };
+}
+
+function collectAssetReferenceValueEntries(
+    value,
+    fieldPath = "",
+    entries = [],
+) {
+    if (typeof value === "string") {
+        const assetId = parseAssetReference(value);
+
+        if (assetId) {
+            entries.push({
+                assetId,
+                reference: value,
+                fieldPath: fieldPath || "value",
+            });
+        }
+
+        return entries;
+    }
+
+    if (Array.isArray(value)) {
+        value.forEach((item, index) => {
+            collectAssetReferenceValueEntries(
+                item,
+                `${fieldPath}[${index}]`,
+                entries,
+            );
+        });
+        return entries;
+    }
+
+    if (!value || typeof value !== "object") {
+        return entries;
+    }
+
+    Object.entries(value).forEach(([key, item]) => {
+        collectAssetReferenceValueEntries(
+            item,
+            fieldPath ? `${fieldPath}.${key}` : key,
+            entries,
+        );
+    });
+
+    return entries;
+}
+
+function createMissingAssetReferenceEntry(
+    referenceEntry,
+    scopeMeta = {},
+    locationMeta = {},
+) {
+    const baseEntry = createAssetUsageEntry(
+        referenceEntry.assetId,
+        scopeMeta,
+        locationMeta,
+    );
+    const fieldPaths = Array.from(
+        new Set(
+            (Array.isArray(referenceEntry.fieldPaths)
+                ? referenceEntry.fieldPaths
+                : []
+            )
+                .map((item) => String(item || "").trim())
+                .filter(Boolean),
+        ),
+    );
+
+    return {
+        ...baseEntry,
+        id: `${baseEntry.id}:missing:${referenceEntry.reference}`,
+        reference: referenceEntry.reference,
+        fieldPaths,
+        fieldCount: fieldPaths.length,
+    };
+}
+
+function collectMissingAssetReferenceEntriesFromLocation(
+    locationValue,
+    scopeMeta = {},
+    locationMeta = {},
+    existingAssetIds = new Set(),
+) {
+    const groupedReferences = new Map();
+
+    collectAssetReferenceValueEntries(locationValue).forEach((entry) => {
+        if (existingAssetIds.has(entry.assetId)) {
+            return;
+        }
+
+        const key = `${entry.assetId}:${entry.reference}`;
+
+        if (!groupedReferences.has(key)) {
+            groupedReferences.set(key, {
+                assetId: entry.assetId,
+                reference: entry.reference,
+                fieldPaths: [],
+            });
+        }
+
+        groupedReferences.get(key).fieldPaths.push(entry.fieldPath);
+    });
+
+    return Array.from(groupedReferences.values()).map((entry) =>
+        createMissingAssetReferenceEntry(entry, scopeMeta, locationMeta),
+    );
+}
+
+function collectMissingAssetReferenceEntriesFromProject(
+    projectData,
+    scopeMeta = {},
+    existingAssetIds = new Set(),
+) {
+    let normalizedProject = null;
+
+    try {
+        normalizedProject = normalizeProjectSchema(cloneDeep(projectData));
+    } catch (error) {
+        console.warn(error);
+        return [];
+    }
+
+    const entries = [];
+
+    normalizedProject.pages.forEach((page, pageIndex) => {
+        const pageName =
+            typeof page?.name === "string" && page.name.trim()
+                ? page.name.trim()
+                : `未命名页面 ${pageIndex + 1}`;
+
+        entries.push(
+            ...collectMissingAssetReferenceEntriesFromLocation(
+                {
+                    ...page,
+                    widgets: [],
+                },
+                scopeMeta,
+                {
+                    locationType: "page",
+                    pageId: page?.id ?? "",
+                    pageName,
+                    primaryLabel: pageName,
+                    secondaryLabel: "页面设置",
+                },
+                existingAssetIds,
+            ),
+        );
+
+        (Array.isArray(page?.widgets) ? page.widgets : []).forEach(
+            (widget, widgetIndex) => {
+                const widgetType = String(widget?.type || "").trim();
+                const widgetTypeLabel =
+                    MATERIAL_LABEL_MAP[widgetType] || widgetType || "组件";
+                const widgetName =
+                    typeof widget?.name === "string" && widget.name.trim()
+                        ? widget.name.trim()
+                        : `未命名组件 ${widgetIndex + 1}`;
+
+                entries.push(
+                    ...collectMissingAssetReferenceEntriesFromLocation(
+                        widget,
+                        scopeMeta,
+                        {
+                            locationType: "widget",
+                            pageId: page?.id ?? "",
+                            pageName,
+                            widgetId: widget?.id ?? "",
+                            widgetName,
+                            widgetType,
+                            widgetTypeLabel,
+                            primaryLabel: widgetName,
+                            secondaryLabel: `${pageName} · ${widgetTypeLabel}`,
+                        },
+                        existingAssetIds,
+                    ),
+                );
+            },
+        );
+    });
+
+    normalizedProject.dataSources.forEach((source, sourceIndex) => {
+        const sourceName =
+            typeof source?.name === "string" && source.name.trim()
+                ? source.name.trim()
+                : `数据源 ${sourceIndex + 1}`;
+
+        entries.push(
+            ...collectMissingAssetReferenceEntriesFromLocation(
+                source,
+                scopeMeta,
+                {
+                    locationType: "source",
+                    sourceId: source?.id ?? "",
+                    sourceName,
+                    primaryLabel: sourceName,
+                    secondaryLabel: "数据源配置",
+                },
+                existingAssetIds,
+            ),
+        );
+    });
+
+    (Array.isArray(normalizedProject.runtimeVariablePresets)
+        ? normalizedProject.runtimeVariablePresets
+        : []
+    ).forEach((preset, presetIndex) => {
+        const variableKey =
+            typeof preset?.key === "string" && preset.key.trim()
+                ? preset.key.trim()
+                : `变量 ${presetIndex + 1}`;
+
+        entries.push(
+            ...collectMissingAssetReferenceEntriesFromLocation(
+                preset,
+                scopeMeta,
+                {
+                    locationType: "variable",
+                    variableKey,
+                    primaryLabel: variableKey,
+                    secondaryLabel: "运行时变量模板",
+                },
+                existingAssetIds,
+            ),
+        );
+    });
+
+    return entries;
+}
+
+function collectAssetUsageEntriesFromProject(projectData, scopeMeta = {}) {
+    const assetReferences = assetLibrary.value
+        .map((asset) => [
+            asset.id,
+            String(asset.reference || createAssetReference(asset.id)).trim(),
+        ])
+        .filter(([, reference]) => Boolean(reference));
+    const entriesByAssetId = Object.fromEntries(
+        assetReferences.map(([assetId]) => [assetId, []]),
+    );
+
+    if (!assetReferences.length) {
+        return entriesByAssetId;
+    }
+
+    let normalizedProject = null;
+
+    try {
+        normalizedProject = normalizeProjectSchema(cloneDeep(projectData));
+    } catch (error) {
+        console.warn(error);
+        return entriesByAssetId;
+    }
+
+    const pushMatchedEntries = (payload, locationMeta) => {
+        if (typeof payload !== "string" || !payload) {
+            return;
+        }
+
+        assetReferences.forEach(([assetId, reference]) => {
+            if (payload.includes(reference)) {
+                entriesByAssetId[assetId].push(
+                    createAssetUsageEntry(assetId, scopeMeta, locationMeta),
+                );
+            }
+        });
+    };
+
+    normalizedProject.pages.forEach((page, pageIndex) => {
+        const pageName =
+            typeof page?.name === "string" && page.name.trim()
+                ? page.name.trim()
+                : `未命名页面 ${pageIndex + 1}`;
+        const pageSettingsPayload = JSON.stringify({
+            ...page,
+            widgets: [],
+        });
+
+        pushMatchedEntries(pageSettingsPayload, {
+            locationType: "page",
+            pageId: page?.id ?? "",
+            pageName,
+            primaryLabel: pageName,
+            secondaryLabel: "页面设置",
+        });
+
+        (Array.isArray(page?.widgets) ? page.widgets : []).forEach(
+            (widget, widgetIndex) => {
+                const widgetType = String(widget?.type || "").trim();
+                const widgetTypeLabel =
+                    MATERIAL_LABEL_MAP[widgetType] || widgetType || "组件";
+                const widgetName =
+                    typeof widget?.name === "string" && widget.name.trim()
+                        ? widget.name.trim()
+                        : `未命名组件 ${widgetIndex + 1}`;
+
+                pushMatchedEntries(JSON.stringify(widget), {
+                    locationType: "widget",
+                    pageId: page?.id ?? "",
+                    pageName,
+                    widgetId: widget?.id ?? "",
+                    widgetName,
+                    widgetType,
+                    widgetTypeLabel,
+                    primaryLabel: widgetName,
+                    secondaryLabel: `${pageName} · ${widgetTypeLabel}`,
+                });
+            },
+        );
+    });
+
+    normalizedProject.dataSources.forEach((source, sourceIndex) => {
+        const sourceName =
+            typeof source?.name === "string" && source.name.trim()
+                ? source.name.trim()
+                : `数据源 ${sourceIndex + 1}`;
+
+        pushMatchedEntries(JSON.stringify(source), {
+            locationType: "source",
+            sourceId: source?.id ?? "",
+            sourceName,
+            primaryLabel: sourceName,
+            secondaryLabel: "数据源配置",
+        });
+    });
+
+    (Array.isArray(normalizedProject.runtimeVariablePresets)
+        ? normalizedProject.runtimeVariablePresets
+        : []
+    ).forEach((preset, presetIndex) => {
+        const variableKey =
+            typeof preset?.key === "string" && preset.key.trim()
+                ? preset.key.trim()
+                : `变量 ${presetIndex + 1}`;
+
+        pushMatchedEntries(JSON.stringify(preset), {
+            locationType: "variable",
+            variableKey,
+            primaryLabel: variableKey,
+            secondaryLabel: "运行时变量模板",
+        });
+    });
+
+    return entriesByAssetId;
+}
+
+const assetUsageDetailMap = computed(() => {
+    const detailMap = Object.fromEntries(
+        assetLibrary.value.map((asset) => [asset.id, createEmptyAssetUsageDetail()]),
+    );
+
+    const mergeCurrentProjectEntries = (entriesByAssetId) => {
+        Object.entries(entriesByAssetId).forEach(([assetId, entries]) => {
+            if (!detailMap[assetId] || !entries.length) {
+                return;
+            }
+
+            detailMap[assetId].currentProjectUsed = 1;
+            detailMap[assetId].currentProjectEntries.push(...entries);
+            detailMap[assetId].currentProjectEntryCount += entries.length;
+        });
+    };
+
+    const mergeScopedEntries = (
+        sectionKey,
+        scopeCountKey,
+        scopeEntryCountKey,
+        entriesByAssetId,
+    ) => {
+        Object.entries(entriesByAssetId).forEach(([assetId, entries]) => {
+            if (!detailMap[assetId] || !entries.length) {
+                return;
+            }
+
+            detailMap[assetId][sectionKey].push(...entries);
+            detailMap[assetId][scopeCountKey] += 1;
+            detailMap[assetId][scopeEntryCountKey] += entries.length;
+        });
+    };
+
+    mergeCurrentProjectEntries(
+        collectAssetUsageEntriesFromProject(project.value, {
+            type: "current-project",
+            id: activeProjectRecordId.value || "current-project",
+            name: currentProjectName.value || "当前项目",
+        }),
+    );
+
+    projectLibrary.value.forEach((record) => {
+        const projectSnapshot = parseProjectSnapshotForAssetUsage(record?.snapshot);
+
+        if (!projectSnapshot) {
+            return;
+        }
+
+        mergeScopedEntries(
+            "projectRecordEntries",
+            "projectRecordCount",
+            "projectRecordEntryCount",
+            collectAssetUsageEntriesFromProject(projectSnapshot, {
+                type: "project-record",
+                id: record?.id ?? "",
+                name:
+                    typeof record?.name === "string" && record.name.trim()
+                        ? record.name.trim()
+                        : "未命名项目快照",
+            }),
+        );
+    });
+
+    publishedSnapshots.value.forEach((snapshot) => {
+        const publishedSnapshot = parseProjectSnapshotForAssetUsage(
+            snapshot?.snapshot,
+        );
+
+        if (!publishedSnapshot) {
+            return;
+        }
+
+        mergeScopedEntries(
+            "publishedSnapshotEntries",
+            "publishedSnapshotCount",
+            "publishedSnapshotEntryCount",
+            collectAssetUsageEntriesFromProject(publishedSnapshot, {
+                type: "published-snapshot",
+                id: snapshot?.id ?? "",
+                name:
+                    typeof snapshot?.name === "string" && snapshot.name.trim()
+                        ? snapshot.name.trim()
+                        : "未命名发布版本",
+            }),
+        );
+    });
+
+    Object.values(detailMap).forEach((detail) => {
+        detail.totalScopes =
+            detail.currentProjectUsed +
+            detail.projectRecordCount +
+            detail.publishedSnapshotCount;
+        detail.totalEntries =
+            detail.currentProjectEntryCount +
+            detail.projectRecordEntryCount +
+            detail.publishedSnapshotEntryCount;
+        detail.total = detail.totalEntries;
+    });
+
+    return detailMap;
+});
+
+const assetUsageMap = computed(() =>
+    Object.fromEntries(
+        assetLibrary.value.map((asset) => {
+            const detail =
+                assetUsageDetailMap.value[asset.id] ?? createEmptyAssetUsageDetail();
+
+            return [
+                asset.id,
+                {
+                    ...detail,
+                    total: detail.totalEntries,
+                },
+            ];
+        }),
+    ),
+);
+const missingAssetReferenceReport = computed(() => {
+    const existingAssetIds = new Set(assetLibrary.value.map((asset) => asset.id));
+    const currentProjectEntries = collectMissingAssetReferenceEntriesFromProject(
+        project.value,
+        {
+            type: "current-project",
+            id: activeProjectRecordId.value || "current-project",
+            name: currentProjectName.value || "当前项目",
+        },
+        existingAssetIds,
+    );
+    const projectRecordEntries = [];
+    const publishedSnapshotEntries = [];
+
+    projectLibrary.value.forEach((record) => {
+        const projectSnapshot = parseProjectSnapshotForAssetUsage(record?.snapshot);
+
+        if (!projectSnapshot) {
+            return;
+        }
+
+        projectRecordEntries.push(
+            ...collectMissingAssetReferenceEntriesFromProject(
+                projectSnapshot,
+                {
+                    type: "project-record",
+                    id: record?.id ?? "",
+                    name:
+                        typeof record?.name === "string" && record.name.trim()
+                            ? record.name.trim()
+                            : "未命名项目快照",
+                },
+                existingAssetIds,
+            ),
+        );
+    });
+
+    publishedSnapshots.value.forEach((snapshot) => {
+        const publishedSnapshot = parseProjectSnapshotForAssetUsage(
+            snapshot?.snapshot,
+        );
+
+        if (!publishedSnapshot) {
+            return;
+        }
+
+        publishedSnapshotEntries.push(
+            ...collectMissingAssetReferenceEntriesFromProject(
+                publishedSnapshot,
+                {
+                    type: "published-snapshot",
+                    id: snapshot?.id ?? "",
+                    name:
+                        typeof snapshot?.name === "string" && snapshot.name.trim()
+                            ? snapshot.name.trim()
+                            : "未命名发布版本",
+                },
+                existingAssetIds,
+            ),
+        );
+    });
+
+    const allEntries = [
+        ...currentProjectEntries,
+        ...projectRecordEntries,
+        ...publishedSnapshotEntries,
+    ];
+
+    return {
+        currentProjectEntries,
+        currentProjectCount: currentProjectEntries.length,
+        projectRecordEntries,
+        projectRecordCount: projectRecordEntries.length,
+        publishedSnapshotEntries,
+        publishedSnapshotCount: publishedSnapshotEntries.length,
+        totalEntries: allEntries.length,
+        uniqueAssetCount: new Set(allEntries.map((entry) => entry.assetId)).size,
+        sections: [
+            {
+                key: "current-project",
+                label: "当前项目",
+                entries: currentProjectEntries,
+            },
+            {
+                key: "project-record",
+                label: "项目快照",
+                entries: projectRecordEntries,
+            },
+            {
+                key: "published-snapshot",
+                label: "发布版本",
+                entries: publishedSnapshotEntries,
+            },
+        ].filter((section) => section.entries.length > 0),
+    };
+});
+const missingAssetReferenceEntriesByAssetId = computed(() =>
+    Object.fromEntries(
+        Array.from(
+            missingAssetReferenceReport.value.sections.reduce(
+                (groupedEntries, section) => {
+                    section.entries.forEach((entry) => {
+                        const assetId = String(entry?.assetId || "").trim();
+
+                        if (!assetId) {
+                            return;
+                        }
+
+                        if (!groupedEntries.has(assetId)) {
+                            groupedEntries.set(assetId, []);
+                        }
+
+                        groupedEntries.get(assetId).push(entry);
+                    });
+                    return groupedEntries;
+                },
+                new Map(),
+            ).entries(),
+        ),
+    ),
+);
+const assetLibrarySummary = computed(() =>
+    assetLibrary.value.reduce(
+        (summary, asset) => {
+            summary.total += 1;
+
+            if (asset.kind === "image") {
+                summary.image += 1;
+            }
+
+            if (asset.kind === "video") {
+                summary.video += 1;
+            }
+
+            return summary;
+        },
+        {
+            total: 0,
+            image: 0,
+            video: 0,
+        },
+    ),
+);
+const selectedWidgetAssetTargetMode = computed(() => {
+    if (selectedWidget.value?.type === "image") {
+        return "image";
+    }
+
+    if (selectedWidget.value?.type === "video") {
+        return "video";
+    }
+
+    return "";
+});
+const selectedWidgetCanReceiveAsset = computed(
+    () =>
+        Boolean(selectedWidgetAssetTargetMode.value) &&
+        Boolean(selectedWidget.value) &&
+        !selectedWidget.value?.locked &&
+        !selectedWidget.value?.hidden,
+);
+const assetLibraryTagOptions = computed(() => [
+    { value: "all", label: "全部标签" },
+    ...Array.from(
+        new Set(
+            assetLibrary.value.flatMap((asset) =>
+                Array.isArray(asset.tags) ? asset.tags : [],
+            ),
+        ),
+    )
+        .sort((left, right) => left.localeCompare(right, "zh-CN"))
+        .map((tag) => ({
+            value: tag,
+            label: tag,
+        })),
+]);
+const assetLibraryGroupedSections = computed(() => {
+    const sections = new Map();
+    const activeFilterTag = assetLibraryFilterTag.value;
+
+    filteredAssetLibrary.value.forEach((asset) => {
+        const tags = Array.isArray(asset.tags) ? asset.tags.filter(Boolean) : [];
+        const groupKeys =
+            activeFilterTag !== "all"
+                ? [activeFilterTag]
+                : tags.length
+                  ? tags
+                  : ["__untagged__"];
+
+        groupKeys.forEach((groupKey) => {
+            const normalizedKey = String(groupKey || "").trim() || "__untagged__";
+
+            if (!sections.has(normalizedKey)) {
+                sections.set(normalizedKey, {
+                    key: normalizedKey,
+                    label:
+                        normalizedKey === "__untagged__"
+                            ? "未分类"
+                            : normalizedKey,
+                    assets: [],
+                });
+            }
+
+            sections.get(normalizedKey).assets.push(asset);
+        });
+    });
+
+    return Array.from(sections.values()).sort((left, right) => {
+        if (left.key === "__untagged__") {
+            return 1;
+        }
+
+        if (right.key === "__untagged__") {
+            return -1;
+        }
+
+        return left.label.localeCompare(right.label, "zh-CN");
+    });
+});
+const filteredAssetLibrary = computed(() => {
+    const keyword = assetLibrarySearchKeyword.value.trim().toLocaleLowerCase();
+
+    return assetLibrary.value.filter((asset) => {
+        if (
+            assetLibraryFilterKind.value !== "all" &&
+            asset.kind !== assetLibraryFilterKind.value
+        ) {
+            return false;
+        }
+
+        if (
+            assetLibraryFilterTag.value !== "all" &&
+            !(Array.isArray(asset.tags) ? asset.tags : []).includes(
+                assetLibraryFilterTag.value,
+            )
+        ) {
+            return false;
+        }
+
+        if (!keyword) {
+            return true;
+        }
+
+        const searchableText = [
+            asset.name,
+            asset.mimeType,
+            asset.kind === "image" ? "图片" : asset.kind === "video" ? "视频" : "",
+            createAssetReference(asset.id),
+            ...(Array.isArray(asset.tags) ? asset.tags : []),
+        ]
+            .filter(Boolean)
+            .join(" ")
+            .toLocaleLowerCase();
+
+        return searchableText.includes(keyword);
+    });
+});
+const selectedAssetIdSet = computed(() => new Set(selectedAssetIds.value));
+const selectedAssetLibrary = computed(() =>
+    assetLibrary.value.filter((asset) => selectedAssetIdSet.value.has(asset.id)),
+);
+const selectedFilteredAssetLibrary = computed(() =>
+    filteredAssetLibrary.value.filter((asset) =>
+        selectedAssetIdSet.value.has(asset.id),
+    ),
+);
+const selectedAssetCount = computed(() => selectedAssetLibrary.value.length);
+const selectedAssetReferencedCount = computed(
+    () =>
+        selectedAssetLibrary.value.filter(
+            (asset) => getAssetUsageInfo(asset.id).total > 0,
+        ).length,
+);
+const selectedAssetDeletableCount = computed(() =>
+    Math.max(
+        selectedAssetCount.value - selectedAssetReferencedCount.value,
+        0,
+    ),
+);
+const canBatchApplyAssetTags = computed(() => {
+    if (!selectedAssetCount.value) {
+        return false;
+    }
+
+    if (assetBatchTagMode.value === "clear") {
+        return true;
+    }
+
+    return normalizeAssetTags(assetBatchTagDraft.value).length > 0;
+});
+const assetLibraryGroupCount = computed(
+    () => assetLibraryGroupedSections.value.length,
+);
+const collapsedAssetGroupKeySet = computed(
+    () => new Set(collapsedAssetGroupKeys.value),
+);
+const isAllAssetGroupsCollapsed = computed(
+    () =>
+        Boolean(assetLibraryGroupedSections.value.length) &&
+        assetLibraryGroupedSections.value.every((section) =>
+            collapsedAssetGroupKeySet.value.has(section.key),
+        ),
+);
+const assetLibraryRenderItems = computed(() => {
+    if (assetLibraryViewMode.value !== "grouped") {
+        return filteredAssetLibrary.value.map((asset) => ({
+            type: "asset",
+            key: `asset-${asset.id}`,
+            asset,
+        }));
+    }
+
+    return assetLibraryGroupedSections.value.flatMap((group) => [
+        {
+            type: "group",
+            key: `asset-group-${group.key}`,
+            group,
+        },
+        ...(
+            collapsedAssetGroupKeySet.value.has(group.key)
+                ? []
+                : group.assets.map((asset) => ({
+                      type: "asset",
+                      key: `asset-group-${group.key}-${asset.id}`,
+                      asset,
+                  }))
+        ),
+    ]);
+});
+const isAllFilteredAssetsSelected = computed(
+    () =>
+        Boolean(filteredAssetLibrary.value.length) &&
+        selectedFilteredAssetLibrary.value.length ===
+            filteredAssetLibrary.value.length,
+);
+const hasAssetLibraryFilters = computed(
+    () =>
+        Boolean(assetLibrarySearchKeyword.value.trim()) ||
+        assetLibraryFilterKind.value !== ASSET_KIND_OPTIONS[0].value ||
+        assetLibraryFilterTag.value !== "all",
+);
 const currentPublishedSnapshot = computed(
     () =>
         publishedSnapshots.value.find(
             (item) => item.id === runtimePublishedSnapshotId.value,
         ) ?? null,
 );
-const currentProjectPublishedSnapshots = computed(() =>
-    publishedSnapshots.value
-        .filter((item) => item.projectRecordId === activeProjectRecordId.value)
-        .sort((left, right) => right.updatedAt - left.updatedAt),
+const currentProjectPublishedSnapshotLibrary = computed(() =>
+    publishedSnapshots.value.filter(
+        (item) => item.projectRecordId === activeProjectRecordId.value,
+    ),
 );
+const currentProjectPublishedRollbackLibrary = computed(() =>
+    publishedRollbackLogs.value
+        .filter((item) => item.projectRecordId === activeProjectRecordId.value)
+        .sort((left, right) => right.rolledBackAt - left.rolledBackAt),
+);
+const currentProjectPublishedOperationLibrary = computed(() =>
+    publishedOperationLogs.value
+        .filter((item) => item.projectRecordId === activeProjectRecordId.value)
+        .sort((left, right) => right.createdAt - left.createdAt),
+);
+const currentProjectPublishedSnapshots = computed(() =>
+    sortPublishedSnapshotCollection(currentProjectPublishedSnapshotLibrary.value),
+);
+const currentProjectPublishedSnapshotIdSet = computed(
+    () => new Set(currentProjectPublishedSnapshotLibrary.value.map((item) => item.id)),
+);
+const currentProjectPublishedRollbackLogs = computed(() =>
+    currentProjectPublishedRollbackLibrary.value,
+);
+const currentProjectPublishedOperationLogs = computed(() =>
+    currentProjectPublishedOperationLibrary.value,
+);
+const currentProjectPublishedApprovalReviewers = computed(() =>
+    Array.from(
+        new Set(
+            currentProjectPublishedSnapshots.value
+                .map((snapshot) =>
+                    normalizePublishedApprovalReviewer(snapshot.approvalReviewer),
+                )
+                .filter(Boolean),
+        ),
+    ).sort((left, right) => left.localeCompare(right, "zh-CN")),
+);
+const currentProjectPublishedApprovalReviewerOptions = computed(() => [
+    { value: "all", label: "全部审批人" },
+    {
+        value: PUBLISHED_APPROVAL_REVIEWER_FILTER_UNASSIGNED,
+        label: "未分配审批人",
+    },
+    ...currentProjectPublishedApprovalReviewers.value.map((reviewer) => ({
+        value: reviewer,
+        label: reviewer,
+    })),
+]);
+const currentProjectPublishedApprovalStats = computed(() => {
+    const snapshots = currentProjectPublishedSnapshots.value;
+    const total = snapshots.length;
+    const pending = snapshots.filter(
+        (item) => normalizePublishedApprovalStatus(item.approvalStatus) === "pending",
+    ).length;
+    const approved = snapshots.filter(
+        (item) =>
+            normalizePublishedApprovalStatus(item.approvalStatus) === "approved",
+    ).length;
+    const rejected = snapshots.filter(
+        (item) =>
+            normalizePublishedApprovalStatus(item.approvalStatus) === "rejected",
+    ).length;
+    const assignedReviewerCount = snapshots.filter((item) =>
+        Boolean(normalizePublishedApprovalReviewer(item.approvalReviewer)),
+    ).length;
+    const unassignedReviewerCount = Math.max(total - assignedReviewerCount, 0);
+
+    return {
+        total,
+        pending,
+        approved,
+        rejected,
+        assignedReviewerCount,
+        unassignedReviewerCount,
+        uniqueReviewerCount: currentProjectPublishedApprovalReviewers.value.length,
+    };
+});
+const publishedSnapshotApprovalStatsCards = computed(() => [
+    {
+        key: "all",
+        label: "全部版本",
+        count: currentProjectPublishedApprovalStats.value.total,
+        detail: currentProjectPublishedApprovalStats.value.uniqueReviewerCount
+            ? `${currentProjectPublishedApprovalStats.value.uniqueReviewerCount} 位审批人`
+            : "尚未分配审批人",
+        active:
+            publishedSnapshotFilterApprovalStatus.value === "all" &&
+            publishedSnapshotFilterApprovalReviewer.value === "all",
+    },
+    {
+        key: "pending",
+        label: "待审批",
+        count: currentProjectPublishedApprovalStats.value.pending,
+        detail: "等待处理",
+        active: publishedSnapshotFilterApprovalStatus.value === "pending",
+    },
+    {
+        key: "approved",
+        label: "已通过",
+        count: currentProjectPublishedApprovalStats.value.approved,
+        detail: "已审核通过",
+        active: publishedSnapshotFilterApprovalStatus.value === "approved",
+    },
+    {
+        key: "rejected",
+        label: "已驳回",
+        count: currentProjectPublishedApprovalStats.value.rejected,
+        detail: "需要重新处理",
+        active: publishedSnapshotFilterApprovalStatus.value === "rejected",
+    },
+    {
+        key: PUBLISHED_APPROVAL_REVIEWER_FILTER_UNASSIGNED,
+        label: "未分配审批人",
+        count: currentProjectPublishedApprovalStats.value.unassignedReviewerCount,
+        detail: currentProjectPublishedApprovalStats.value.assignedReviewerCount
+            ? `已分配 ${currentProjectPublishedApprovalStats.value.assignedReviewerCount} 个`
+            : "全部待分配",
+        active:
+            publishedSnapshotFilterApprovalReviewer.value ===
+            PUBLISHED_APPROVAL_REVIEWER_FILTER_UNASSIGNED,
+    },
+]);
 const latestProjectPublishedSnapshot = computed(
-    () => currentProjectPublishedSnapshots.value[0] ?? null,
+    () =>
+        [...currentProjectPublishedSnapshotLibrary.value].sort(
+            (left, right) => right.updatedAt - left.updatedAt,
+        )[0] ?? null,
+);
+const editingPublishedSnapshot = computed(
+    () =>
+        publishedSnapshots.value.find(
+            (item) => item.id === editingPublishedSnapshotId.value,
+        ) ?? null,
+);
+const publishedSnapshotDiffMap = computed(() =>
+    Object.fromEntries(
+        currentProjectPublishedSnapshots.value.map((snapshot) => [
+            snapshot.id,
+            buildPublishedSnapshotDiffSummary(snapshot, project.value),
+        ]),
+    ),
+);
+const filteredProjectPublishedSnapshots = computed(() => {
+    const keyword = publishedSnapshotSearchKeyword.value.trim().toLocaleLowerCase();
+
+    const filtered = currentProjectPublishedSnapshots.value.filter((snapshot) => {
+        if (
+            publishedSnapshotFilterEnvironment.value !== "all" &&
+            snapshot.environment !== publishedSnapshotFilterEnvironment.value
+        ) {
+            return false;
+        }
+
+        if (
+            publishedSnapshotFilterApprovalStatus.value !== "all" &&
+            snapshot.approvalStatus !== publishedSnapshotFilterApprovalStatus.value
+        ) {
+            return false;
+        }
+
+        if (
+            publishedSnapshotFilterApprovalReviewer.value ===
+                PUBLISHED_APPROVAL_REVIEWER_FILTER_UNASSIGNED &&
+            normalizePublishedApprovalReviewer(snapshot.approvalReviewer)
+        ) {
+            return false;
+        }
+
+        if (
+            publishedSnapshotFilterApprovalReviewer.value !== "all" &&
+            publishedSnapshotFilterApprovalReviewer.value !==
+                PUBLISHED_APPROVAL_REVIEWER_FILTER_UNASSIGNED &&
+            normalizePublishedApprovalReviewer(snapshot.approvalReviewer) !==
+                publishedSnapshotFilterApprovalReviewer.value
+        ) {
+            return false;
+        }
+
+        if (
+            publishedSnapshotFilterLockState.value === "locked" &&
+            !snapshot.locked
+        ) {
+            return false;
+        }
+
+        if (
+            publishedSnapshotFilterLockState.value === "unlocked" &&
+            snapshot.locked
+        ) {
+            return false;
+        }
+
+        if (!keyword) {
+            return true;
+        }
+
+        const searchableText = [
+            snapshot.name,
+            snapshot.note,
+            snapshot.pageName,
+            snapshot.projectName,
+            formatPublishedEnvironmentLabel(snapshot.environment),
+            formatPublishedApprovalStatusLabel(snapshot.approvalStatus),
+            snapshot.approvalReviewer,
+            snapshot.approvalComment,
+            ...(snapshot.tags ?? []),
+        ]
+            .filter(Boolean)
+            .join(" ")
+            .toLocaleLowerCase();
+
+        return searchableText.includes(keyword);
+    });
+
+    return sortPublishedSnapshotCollection(
+        filtered,
+        publishedSnapshotSortMode.value,
+    );
+});
+const hasPublishedSnapshotFilters = computed(
+    () =>
+        Boolean(publishedSnapshotSearchKeyword.value.trim()) ||
+        publishedSnapshotFilterEnvironment.value !== "all" ||
+        publishedSnapshotFilterApprovalStatus.value !== "all" ||
+        publishedSnapshotFilterApprovalReviewer.value !== "all" ||
+        publishedSnapshotFilterLockState.value !== "all" ||
+        publishedSnapshotSortMode.value !== PUBLISHED_SORT_OPTIONS[0].value,
+);
+const filteredProjectPublishedRollbackLogs = computed(() => {
+    const keyword = publishedRollbackSearchKeyword.value.trim().toLocaleLowerCase();
+
+    return currentProjectPublishedRollbackLogs.value.filter((log) => {
+        if (
+            publishedRollbackFilterEnvironment.value !== "all" &&
+            log.environment !== publishedRollbackFilterEnvironment.value
+        ) {
+            return false;
+        }
+
+        const linked = currentProjectPublishedSnapshotIdSet.value.has(log.snapshotId);
+
+        if (publishedRollbackFilterRelation.value === "linked" && !linked) {
+            return false;
+        }
+
+        if (publishedRollbackFilterRelation.value === "missing" && linked) {
+            return false;
+        }
+
+        if (!keyword) {
+            return true;
+        }
+
+        const searchableText = [
+            log.snapshotName,
+            log.pageName,
+            log.projectName,
+            log.summary,
+            formatPublishedEnvironmentLabel(log.environment),
+            ...(log.tags ?? []),
+        ]
+            .filter(Boolean)
+            .join(" ")
+            .toLocaleLowerCase();
+
+        return searchableText.includes(keyword);
+    });
+});
+const hasPublishedRollbackFilters = computed(
+    () =>
+        Boolean(publishedRollbackSearchKeyword.value.trim()) ||
+        publishedRollbackFilterEnvironment.value !== "all" ||
+        publishedRollbackFilterRelation.value !== "all",
+);
+const filteredProjectPublishedOperationLogs = computed(() => {
+    const keyword = publishedOperationSearchKeyword.value
+        .trim()
+        .toLocaleLowerCase();
+
+    return currentProjectPublishedOperationLogs.value.filter((log) => {
+        if (
+            publishedOperationFilterAction.value !== "all" &&
+            log.action !== publishedOperationFilterAction.value
+        ) {
+            return false;
+        }
+
+        if (!keyword) {
+            return true;
+        }
+
+        const searchableText = [
+            log.actionLabel,
+            log.summary,
+            log.detail,
+            ...(log.snapshotNames ?? []),
+        ]
+            .filter(Boolean)
+            .join(" ")
+            .toLocaleLowerCase();
+
+        return searchableText.includes(keyword);
+    });
+});
+const hasPublishedOperationFilters = computed(
+    () =>
+        Boolean(publishedOperationSearchKeyword.value.trim()) ||
+        publishedOperationFilterAction.value !== "all",
+);
+const activePublishedOperationLog = computed(
+    () =>
+        publishedOperationLogs.value.find(
+            (item) => item.id === dialogOperationLogId.value,
+        ) ?? null,
+);
+const activePublishedOperationLogDetailText = computed(() =>
+    activePublishedOperationLog.value
+        ? JSON.stringify(activePublishedOperationLog.value, null, 2)
+        : "",
+);
+const selectedPublishedSnapshotSet = computed(
+    () => new Set(selectedPublishedSnapshotIds.value),
+);
+const selectedProjectPublishedSnapshots = computed(() =>
+    currentProjectPublishedSnapshots.value.filter((snapshot) =>
+        selectedPublishedSnapshotSet.value.has(snapshot.id),
+    ),
+);
+const selectedFilteredPublishedSnapshots = computed(() =>
+    filteredProjectPublishedSnapshots.value.filter((snapshot) =>
+        selectedPublishedSnapshotSet.value.has(snapshot.id),
+    ),
+);
+const selectedPublishedSnapshotCount = computed(
+    () => selectedProjectPublishedSnapshots.value.length,
+);
+const selectedPublishedSnapshotLockedCount = computed(
+    () => selectedProjectPublishedSnapshots.value.filter((item) => item.locked).length,
+);
+const selectedPublishedSnapshotUnlockedCount = computed(() =>
+    Math.max(
+        selectedPublishedSnapshotCount.value -
+            selectedPublishedSnapshotLockedCount.value,
+        0,
+    ),
+);
+const selectedPublishedSnapshotPinnedCount = computed(
+    () => selectedProjectPublishedSnapshots.value.filter((item) => item.pinned).length,
+);
+const selectedPublishedSnapshotUnpinnedCount = computed(() =>
+    Math.max(
+        selectedPublishedSnapshotCount.value -
+            selectedPublishedSnapshotPinnedCount.value,
+        0,
+    ),
+);
+const selectedPublishedSnapshotPendingCount = computed(
+    () =>
+        selectedProjectPublishedSnapshots.value.filter(
+            (item) =>
+                normalizePublishedApprovalStatus(item.approvalStatus) === "pending",
+        ).length,
+);
+const selectedPublishedSnapshotApprovedCount = computed(
+    () =>
+        selectedProjectPublishedSnapshots.value.filter(
+            (item) =>
+                normalizePublishedApprovalStatus(item.approvalStatus) ===
+                "approved",
+        ).length,
+);
+const selectedPublishedSnapshotRejectedCount = computed(
+    () =>
+        selectedProjectPublishedSnapshots.value.filter(
+            (item) =>
+                normalizePublishedApprovalStatus(item.approvalStatus) ===
+                "rejected",
+        ).length,
+);
+const selectedPublishedSnapshotApprovableCount = computed(
+    () =>
+        selectedProjectPublishedSnapshots.value.filter(
+            (item) =>
+                !item.locked &&
+                normalizePublishedApprovalStatus(item.approvalStatus) !==
+                    "approved",
+        ).length,
+);
+const selectedPublishedSnapshotRejectableCount = computed(
+    () =>
+        selectedProjectPublishedSnapshots.value.filter(
+            (item) =>
+                !item.locked &&
+                normalizePublishedApprovalStatus(item.approvalStatus) !==
+                    "rejected",
+        ).length,
+);
+const isAllFilteredPublishedSnapshotsSelected = computed(
+    () =>
+        Boolean(filteredProjectPublishedSnapshots.value.length) &&
+        selectedFilteredPublishedSnapshots.value.length ===
+            filteredProjectPublishedSnapshots.value.length,
+);
+const canBatchApplyPublishedSnapshotMeta = computed(
+    () =>
+        selectedPublishedSnapshotUnlockedCount.value > 0 &&
+        (
+            publishedSnapshotBatchApplyNote.value ||
+            publishedSnapshotBatchApplyTags.value ||
+            publishedSnapshotBatchApplyEnvironment.value ||
+            publishedSnapshotBatchApplyApprovalStatus.value
+        ),
 );
 
 const runtimeDebugSummary = computed(() => {
@@ -1734,8 +3235,76 @@ function copyProjectSourceSecrets(fromProjectId, toProjectId) {
     persistDataSourceSecretStore();
 }
 
-function buildProjectExportPayload(projectData) {
-    return JSON.stringify(sanitizeProjectSourceSecrets(projectData), null, 2);
+function collectReferencedAssetsFromProject(projectData) {
+    const projectSnapshot =
+        typeof projectData === "string"
+            ? projectData
+            : JSON.stringify(projectData ?? {});
+
+    return assetLibrary.value.filter((asset) =>
+        projectSnapshot.includes(asset.reference),
+    );
+}
+
+async function buildProjectExportPayload(projectData) {
+    if (!assetLibraryReady.value) {
+        await loadAssetLibrary({ silent: true });
+    }
+
+    const sanitizedProject = sanitizeProjectSourceSecrets(projectData);
+    const referencedAssets = collectReferencedAssetsFromProject(sanitizedProject);
+    const serializedAssets = await serializeAssetRecords(referencedAssets);
+
+    return JSON.stringify(
+        {
+            type: PROJECT_EXPORT_PACKAGE_TYPE,
+            version: PROJECT_EXPORT_PACKAGE_VERSION,
+            exportedAt: Date.now(),
+            project: sanitizedProject,
+            assets: serializedAssets,
+        },
+        null,
+        2,
+    );
+}
+
+function parseImportedProjectPayload(text) {
+    const parsed = JSON.parse(text);
+
+    if (
+        parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        parsed.project
+    ) {
+        return {
+            project: normalizeProjectSchema(parsed.project),
+            assets: deserializeAssetPackageRecords(parsed.assets),
+            packageType: String(parsed.type || "").trim(),
+            packageVersion: Number(parsed.version) || 1,
+        };
+    }
+
+    return {
+        project: normalizeProjectSchema(parsed),
+        assets: [],
+        packageType: "",
+        packageVersion: 0,
+    };
+}
+
+async function importProjectEmbeddedAssets(assetRecords = []) {
+    const normalizedAssets = (Array.isArray(assetRecords) ? assetRecords : []).filter(
+        Boolean,
+    );
+
+    if (!normalizedAssets.length) {
+        return 0;
+    }
+
+    await putAssetRecords(normalizedAssets);
+    await loadAssetLibrary({ silent: true });
+    return normalizedAssets.length;
 }
 
 function getRestorableEditorProject() {
@@ -1754,6 +3323,265 @@ function createPublishedSnapshotId() {
         globalThis.crypto?.randomUUID?.() ??
         `publish-${Date.now()}-${Math.random().toString(16).slice(2)}`
     );
+}
+
+function createPublishedRollbackLogId() {
+    return (
+        globalThis.crypto?.randomUUID?.() ??
+        `rollback-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    );
+}
+
+function createUniquePublishedSnapshotId(usedIds) {
+    let nextId = createPublishedSnapshotId();
+
+    while (usedIds.has(nextId)) {
+        nextId = createPublishedSnapshotId();
+    }
+
+    usedIds.add(nextId);
+    return nextId;
+}
+
+function createUniquePublishedRollbackLogId(usedIds) {
+    let nextId = createPublishedRollbackLogId();
+
+    while (usedIds.has(nextId)) {
+        nextId = createPublishedRollbackLogId();
+    }
+
+    usedIds.add(nextId);
+    return nextId;
+}
+
+function normalizePublishedEnvironment(value) {
+    return PUBLISHED_ENVIRONMENT_LABEL_MAP[value]
+        ? value
+        : DEFAULT_PUBLISHED_ENVIRONMENT;
+}
+
+function normalizePublishedApprovalStatus(value) {
+    return PUBLISHED_APPROVAL_STATUS_LABEL_MAP[value]
+        ? value
+        : DEFAULT_PUBLISHED_APPROVAL_STATUS;
+}
+
+function normalizePublishedApprovalReviewer(value) {
+    return String(value || "").trim().slice(0, 32);
+}
+
+function normalizePublishedApprovalComment(value) {
+    return String(value || "").trim().slice(0, 240);
+}
+
+function normalizePublishedTagList(rawTags) {
+    const entries = Array.isArray(rawTags)
+        ? rawTags
+        : typeof rawTags === "string"
+          ? rawTags.split(/[,\n，、|]/)
+          : [];
+
+    return Array.from(
+        new Set(
+            entries
+                .map((item) => String(item || "").trim())
+                .filter(Boolean)
+                .slice(0, 8),
+        ),
+    );
+}
+
+function formatPublishedTagList(tags) {
+    return normalizePublishedTagList(tags).join(", ");
+}
+
+function formatPublishedEnvironmentLabel(value) {
+    return (
+        PUBLISHED_ENVIRONMENT_LABEL_MAP[normalizePublishedEnvironment(value)] ??
+        PUBLISHED_ENVIRONMENT_LABEL_MAP[DEFAULT_PUBLISHED_ENVIRONMENT]
+    );
+}
+
+function formatPublishedApprovalStatusLabel(value) {
+    return (
+        PUBLISHED_APPROVAL_STATUS_LABEL_MAP[
+            normalizePublishedApprovalStatus(value)
+        ] ?? PUBLISHED_APPROVAL_STATUS_LABEL_MAP[DEFAULT_PUBLISHED_APPROVAL_STATUS]
+    );
+}
+
+function createPublishedApprovalHistoryId() {
+    return `approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createPublishedApprovalHistoryEntry(options = {}) {
+    const status = normalizePublishedApprovalStatus(options.status);
+    const reviewer = normalizePublishedApprovalReviewer(options.reviewer);
+    const comment = normalizePublishedApprovalComment(options.comment);
+    const changedAt = Number.isFinite(Number(options.changedAt))
+        ? Number(options.changedAt)
+        : Date.now();
+
+    return {
+        id:
+            typeof options.id === "string" && options.id.trim()
+                ? options.id.trim()
+                : createPublishedApprovalHistoryId(),
+        status,
+        reviewer,
+        comment,
+        changedAt,
+    };
+}
+
+function normalizePublishedApprovalHistory(rawHistory, fallback = {}) {
+    const normalizedHistory = (Array.isArray(rawHistory) ? rawHistory : [])
+        .map((item) => {
+            if (!item || typeof item !== "object") {
+                return null;
+            }
+
+            return createPublishedApprovalHistoryEntry({
+                id: item.id,
+                status: item.status,
+                reviewer: item.reviewer,
+                comment: item.comment,
+                changedAt: item.changedAt,
+            });
+        })
+        .filter(Boolean)
+        .sort((left, right) => right.changedAt - left.changedAt)
+        .slice(0, PUBLISHED_APPROVAL_HISTORY_LIMIT);
+
+    if (normalizedHistory.length) {
+        return normalizedHistory;
+    }
+
+    return [
+        createPublishedApprovalHistoryEntry({
+            status: fallback.status,
+            reviewer: fallback.reviewer,
+            comment: fallback.comment,
+            changedAt: fallback.changedAt,
+        }),
+    ];
+}
+
+function applyPublishedApprovalMeta(snapshot, options = {}) {
+    const nextStatus = normalizePublishedApprovalStatus(
+        options.approvalStatus ?? snapshot.approvalStatus,
+    );
+    const nextReviewer = normalizePublishedApprovalReviewer(
+        options.approvalReviewer ?? snapshot.approvalReviewer,
+    );
+    const nextComment = normalizePublishedApprovalComment(
+        options.approvalComment ?? snapshot.approvalComment,
+    );
+    const previousHistory = normalizePublishedApprovalHistory(
+        snapshot.approvalHistory,
+        {
+            status: snapshot.approvalStatus,
+            reviewer: snapshot.approvalReviewer,
+            comment: snapshot.approvalComment,
+            changedAt: snapshot.approvalUpdatedAt ?? snapshot.updatedAt,
+        },
+    );
+    const changed =
+        nextStatus !== normalizePublishedApprovalStatus(snapshot.approvalStatus) ||
+        nextReviewer !== normalizePublishedApprovalReviewer(snapshot.approvalReviewer) ||
+        nextComment !== normalizePublishedApprovalComment(snapshot.approvalComment);
+    const changedAt = changed
+        ? Date.now()
+        : Number(snapshot.approvalUpdatedAt) || Number(snapshot.updatedAt) || Date.now();
+
+    return {
+        approvalChanged: changed,
+        approvalStatus: nextStatus,
+        approvalReviewer: nextReviewer,
+        approvalComment: nextComment,
+        approvalUpdatedAt: changedAt,
+        approvalHistory: changed
+            ? [
+                  createPublishedApprovalHistoryEntry({
+                      status: nextStatus,
+                      reviewer: nextReviewer,
+                      comment: nextComment,
+                      changedAt,
+                  }),
+                  ...previousHistory,
+              ].slice(0, PUBLISHED_APPROVAL_HISTORY_LIMIT)
+            : previousHistory,
+    };
+}
+
+function buildPublishedApprovalSummary(status, reviewer = "", comment = "") {
+    return [
+        formatPublishedApprovalStatusLabel(status),
+        reviewer ? `审批人：${reviewer}` : "",
+        comment
+            ? `${
+                  normalizePublishedApprovalStatus(status) === "rejected"
+                      ? "驳回原因"
+                      : "审批说明"
+              }：${comment}`
+            : "",
+    ]
+        .filter(Boolean)
+        .join(" · ");
+}
+
+function getPublishedApprovalCommentLabel(status) {
+    return normalizePublishedApprovalStatus(status) === "rejected"
+        ? "驳回原因"
+        : "审批说明";
+}
+
+function getPublishedApprovalCommentPlaceholder(status) {
+    return normalizePublishedApprovalStatus(status) === "rejected"
+        ? "请输入驳回原因，便于后续回溯"
+        : "可选：记录审批意见、审核说明或发布要求";
+}
+
+function sortPublishedSnapshotCollection(
+    snapshots,
+    sortMode = PUBLISHED_SORT_OPTIONS[0].value,
+) {
+    const normalizedList = Array.isArray(snapshots) ? [...snapshots] : [];
+
+    return normalizedList.sort((left, right) => {
+        if (Boolean(left.pinned) !== Boolean(right.pinned)) {
+            return left.pinned ? -1 : 1;
+        }
+
+        if (left.pinned && right.pinned) {
+            const leftPinnedAt = Number(left.pinnedAt) || Number(left.updatedAt) || 0;
+            const rightPinnedAt =
+                Number(right.pinnedAt) || Number(right.updatedAt) || 0;
+
+            if (leftPinnedAt !== rightPinnedAt) {
+                return rightPinnedAt - leftPinnedAt;
+            }
+        }
+
+        if (sortMode === "pinned-oldest") {
+            if (left.updatedAt !== right.updatedAt) {
+                return left.updatedAt - right.updatedAt;
+            }
+        } else if (sortMode === "pinned-name") {
+            const nameCompare = String(left.name || "").localeCompare(
+                String(right.name || ""),
+                "zh-CN",
+            );
+
+            if (nameCompare !== 0) {
+                return nameCompare;
+            }
+        } else if (left.updatedAt !== right.updatedAt) {
+            return right.updatedAt - left.updatedAt;
+        }
+
+        return String(left.id || "").localeCompare(String(right.id || ""), "zh-CN");
+    });
 }
 
 function normalizePublishedSnapshotRecord(rawRecord, index = 0) {
@@ -1780,6 +3608,24 @@ function normalizePublishedSnapshotRecord(rawRecord, index = 0) {
             normalizedProject.pages.find((page) => page.id === pageId)?.name ??
             rawRecord.pageName ??
             "未命名页面";
+        const createdAt = Number.isFinite(Number(rawRecord.createdAt))
+            ? Number(rawRecord.createdAt)
+            : Date.now();
+        const updatedAt = Number.isFinite(Number(rawRecord.updatedAt))
+            ? Number(rawRecord.updatedAt)
+            : Date.now();
+        const approvalReviewer = normalizePublishedApprovalReviewer(
+            rawRecord.approvalReviewer,
+        );
+        const approvalComment = normalizePublishedApprovalComment(
+            rawRecord.approvalComment,
+        );
+        const approvalStatus = normalizePublishedApprovalStatus(
+            rawRecord.approvalStatus,
+        );
+        const approvalUpdatedAt = Number.isFinite(Number(rawRecord.approvalUpdatedAt))
+            ? Number(rawRecord.approvalUpdatedAt)
+            : updatedAt;
 
         return {
             id:
@@ -1801,12 +3647,34 @@ function normalizePublishedSnapshotRecord(rawRecord, index = 0) {
                     : deriveProjectRecordName(normalizedProject),
             pageId,
             pageName,
-            createdAt: Number.isFinite(Number(rawRecord.createdAt))
-                ? Number(rawRecord.createdAt)
-                : Date.now(),
-            updatedAt: Number.isFinite(Number(rawRecord.updatedAt))
-                ? Number(rawRecord.updatedAt)
-                : Date.now(),
+            note:
+                typeof rawRecord.note === "string"
+                    ? rawRecord.note.trim()
+                    : "",
+            environment: normalizePublishedEnvironment(rawRecord.environment),
+            approvalStatus,
+            approvalReviewer,
+            approvalComment,
+            approvalUpdatedAt,
+            approvalHistory: normalizePublishedApprovalHistory(
+                rawRecord.approvalHistory,
+                {
+                    status: approvalStatus,
+                    reviewer: approvalReviewer,
+                    comment: approvalComment,
+                    changedAt: approvalUpdatedAt,
+                },
+            ),
+            tags: normalizePublishedTagList(rawRecord.tags),
+            locked: Boolean(rawRecord.locked),
+            pinned: Boolean(rawRecord.pinned),
+            pinnedAt:
+                Boolean(rawRecord.pinned) &&
+                Number.isFinite(Number(rawRecord.pinnedAt))
+                    ? Number(rawRecord.pinnedAt)
+                    : 0,
+            createdAt,
+            updatedAt,
             snapshot: JSON.stringify(
                 sanitizeProjectSourceSecrets(normalizedProject),
             ),
@@ -1835,10 +3703,11 @@ function loadPublishedSnapshotLibrary() {
             return [];
         }
 
-        return parsed
-            .map((item, index) => normalizePublishedSnapshotRecord(item, index))
-            .filter(Boolean)
-            .sort((left, right) => right.updatedAt - left.updatedAt);
+        return sortPublishedSnapshotCollection(
+            parsed
+                .map((item, index) => normalizePublishedSnapshotRecord(item, index))
+                .filter(Boolean),
+        );
     } catch (error) {
         console.warn(error);
         return [];
@@ -1853,6 +3722,215 @@ function persistPublishedSnapshotLibrary(library) {
     localStorage.setItem(
         PUBLISHED_SNAPSHOT_STORAGE_KEY,
         JSON.stringify(library),
+    );
+}
+
+function normalizePublishedRollbackLogRecord(rawRecord, index = 0) {
+    if (!rawRecord || typeof rawRecord !== "object") {
+        return null;
+    }
+
+    const snapshotId =
+        typeof rawRecord.snapshotId === "string" && rawRecord.snapshotId
+            ? rawRecord.snapshotId
+            : "";
+
+    if (!snapshotId) {
+        return null;
+    }
+
+    return {
+        id:
+            typeof rawRecord.id === "string" && rawRecord.id
+                ? rawRecord.id
+                : `rollback-${index + 1}`,
+        projectRecordId:
+            typeof rawRecord.projectRecordId === "string"
+                ? rawRecord.projectRecordId
+                : "",
+        projectName:
+            typeof rawRecord.projectName === "string"
+                ? rawRecord.projectName.trim()
+                : "",
+        snapshotId,
+        snapshotName:
+            typeof rawRecord.snapshotName === "string"
+                ? rawRecord.snapshotName.trim()
+                : "未命名发布版本",
+        pageId:
+            typeof rawRecord.pageId === "string" ? rawRecord.pageId : "",
+        pageName:
+            typeof rawRecord.pageName === "string"
+                ? rawRecord.pageName.trim()
+                : "未命名页面",
+        environment: normalizePublishedEnvironment(rawRecord.environment),
+        tags: normalizePublishedTagList(rawRecord.tags),
+        summary:
+            typeof rawRecord.summary === "string"
+                ? rawRecord.summary.trim()
+                : "",
+        rolledBackAt: Number.isFinite(Number(rawRecord.rolledBackAt))
+            ? Number(rawRecord.rolledBackAt)
+            : Date.now(),
+    };
+}
+
+function loadPublishedRollbackLogLibrary() {
+    if (typeof localStorage === "undefined") {
+        return [];
+    }
+
+    const rawValue = localStorage.getItem(PUBLISHED_ROLLBACK_LOG_STORAGE_KEY);
+
+    if (!rawValue) {
+        return [];
+    }
+
+    try {
+        const parsed = JSON.parse(rawValue);
+
+        if (!Array.isArray(parsed)) {
+            return [];
+        }
+
+        return parsed
+            .map((item, index) => normalizePublishedRollbackLogRecord(item, index))
+            .filter(Boolean)
+            .sort((left, right) => right.rolledBackAt - left.rolledBackAt)
+            .slice(0, PUBLISHED_ROLLBACK_LOG_LIMIT);
+    } catch (error) {
+        console.warn(error);
+        return [];
+    }
+}
+
+function persistPublishedRollbackLogLibrary(library) {
+    if (typeof localStorage === "undefined") {
+        return;
+    }
+
+    localStorage.setItem(
+        PUBLISHED_ROLLBACK_LOG_STORAGE_KEY,
+        JSON.stringify(library.slice(0, PUBLISHED_ROLLBACK_LOG_LIMIT)),
+    );
+}
+
+function createPublishedOperationLogId() {
+    return (
+        globalThis.crypto?.randomUUID?.() ??
+        `publish-operation-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    );
+}
+
+function formatPublishedOperationActionLabel(action) {
+    return (
+        PUBLISHED_OPERATION_ACTION_LABEL_MAP[String(action || "").trim()] ??
+        "发布操作"
+    );
+}
+
+function normalizePublishedOperationLogRecord(rawRecord, index = 0) {
+    if (!rawRecord || typeof rawRecord !== "object") {
+        return null;
+    }
+
+    const action =
+        typeof rawRecord.action === "string" && rawRecord.action.trim()
+            ? rawRecord.action.trim()
+            : "unknown";
+    const snapshotIds = Array.from(
+        new Set(
+            (Array.isArray(rawRecord.snapshotIds) ? rawRecord.snapshotIds : [])
+                .map((item) => String(item || "").trim())
+                .filter(Boolean),
+        ),
+    ).slice(0, 12);
+    const snapshotNames = Array.from(
+        new Set(
+            (
+                Array.isArray(rawRecord.snapshotNames)
+                    ? rawRecord.snapshotNames
+                    : typeof rawRecord.snapshotName === "string"
+                      ? [rawRecord.snapshotName]
+                      : []
+            )
+                .map((item) => String(item || "").trim())
+                .filter(Boolean),
+        ),
+    ).slice(0, 12);
+
+    return {
+        id:
+            typeof rawRecord.id === "string" && rawRecord.id
+                ? rawRecord.id
+                : `publish-operation-${index + 1}`,
+        projectRecordId:
+            typeof rawRecord.projectRecordId === "string"
+                ? rawRecord.projectRecordId
+                : "",
+        projectName:
+            typeof rawRecord.projectName === "string"
+                ? rawRecord.projectName.trim()
+                : "",
+        action,
+        actionLabel:
+            typeof rawRecord.actionLabel === "string" &&
+            rawRecord.actionLabel.trim()
+                ? rawRecord.actionLabel.trim()
+                : formatPublishedOperationActionLabel(action),
+        summary:
+            typeof rawRecord.summary === "string"
+                ? rawRecord.summary.trim()
+                : "",
+        detail:
+            typeof rawRecord.detail === "string"
+                ? rawRecord.detail.trim()
+                : "",
+        snapshotIds,
+        snapshotNames,
+        createdAt: Number.isFinite(Number(rawRecord.createdAt))
+            ? Number(rawRecord.createdAt)
+            : Date.now(),
+    };
+}
+
+function loadPublishedOperationLogLibrary() {
+    if (typeof localStorage === "undefined") {
+        return [];
+    }
+
+    const rawValue = localStorage.getItem(PUBLISHED_OPERATION_LOG_STORAGE_KEY);
+
+    if (!rawValue) {
+        return [];
+    }
+
+    try {
+        const parsed = JSON.parse(rawValue);
+
+        if (!Array.isArray(parsed)) {
+            return [];
+        }
+
+        return parsed
+            .map((item, index) => normalizePublishedOperationLogRecord(item, index))
+            .filter(Boolean)
+            .sort((left, right) => right.createdAt - left.createdAt)
+            .slice(0, PUBLISHED_OPERATION_LOG_LIMIT);
+    } catch (error) {
+        console.warn(error);
+        return [];
+    }
+}
+
+function persistPublishedOperationLogLibrary(library) {
+    if (typeof localStorage === "undefined") {
+        return;
+    }
+
+    localStorage.setItem(
+        PUBLISHED_OPERATION_LOG_STORAGE_KEY,
+        JSON.stringify(library.slice(0, PUBLISHED_OPERATION_LOG_LIMIT)),
     );
 }
 
@@ -1891,6 +3969,7 @@ function resolvePublishedRuntimeState(routeState, snapshotLibrary) {
 
 function buildPublishedSnapshotRecord(projectData, options = {}) {
     const normalizedProject = normalizeProjectSchema(cloneDeep(projectData));
+    const now = Date.now();
     const pageId =
         typeof options.pageId === "string" &&
         normalizedProject.pages.some((page) => page.id === options.pageId)
@@ -1905,6 +3984,14 @@ function buildPublishedSnapshotRecord(projectData, options = {}) {
     if (pageId) {
         normalizedProject.activePageId = pageId;
     }
+
+    const approvalStatus = normalizePublishedApprovalStatus(options.approvalStatus);
+    const approvalReviewer = normalizePublishedApprovalReviewer(
+        options.approvalReviewer,
+    );
+    const approvalComment = normalizePublishedApprovalComment(
+        options.approvalComment,
+    );
 
     return {
         id: createPublishedSnapshotId(),
@@ -1922,8 +4009,30 @@ function buildPublishedSnapshotRecord(projectData, options = {}) {
                 : deriveProjectRecordName(normalizedProject),
         pageId,
         pageName,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        note:
+            typeof options.note === "string" ? options.note.trim() : "",
+        environment: normalizePublishedEnvironment(options.environment),
+        approvalStatus,
+        approvalReviewer,
+        approvalComment,
+        approvalUpdatedAt: now,
+        approvalHistory: [
+            createPublishedApprovalHistoryEntry({
+                status: approvalStatus,
+                reviewer: approvalReviewer,
+                comment: approvalComment,
+                changedAt: now,
+            }),
+        ],
+        tags: normalizePublishedTagList(options.tags),
+        locked: Boolean(options.locked),
+        pinned: Boolean(options.pinned),
+        pinnedAt:
+            Boolean(options.pinned) && Number.isFinite(Number(options.pinnedAt))
+                ? Number(options.pinnedAt)
+                : 0,
+        createdAt: now,
+        updatedAt: now,
         snapshot: JSON.stringify(
             sanitizeProjectSourceSecrets(normalizedProject),
         ),
@@ -2383,16 +4492,7 @@ function flushProjectSync() {
         return;
     }
 
-    rememberProjectSourceSecrets(activeProjectRecordId.value, project.value);
-    const persistedSnapshot = JSON.stringify(
-        sanitizeProjectSourceSecrets(project.value),
-    );
-
-    if (typeof localStorage !== "undefined") {
-        localStorage.setItem(STORAGE_KEY, persistedSnapshot);
-    }
-
-    syncActiveProjectRecord(persistedSnapshot);
+    const persistedSnapshot = persistEditorProjectState(project.value);
 
     if (!isRestoringHistory.value) {
         const previousSnapshot = lastProjectSnapshot;
@@ -3137,6 +5237,1371 @@ async function copyTextToClipboard(value, messages) {
     }
 }
 
+function resolveAssetReference(value = "") {
+    const normalizedValue = String(value || "").trim();
+    const assetId = parseAssetReference(normalizedValue);
+
+    if (!assetId) {
+        return normalizedValue;
+    }
+
+    return assetPreviewUrlMap.value[assetId] ?? "";
+}
+
+provide("resolveAssetReference", resolveAssetReference);
+
+function getAssetKindLabel(kind = "") {
+    return (
+        ASSET_KIND_OPTIONS.find((option) => option.value === kind)?.label ?? "资源"
+    );
+}
+
+function getAssetBaseName(name = "") {
+    return String(name || "")
+        .trim()
+        .replace(/\.[^.]+$/, "");
+}
+
+function getAssetById(assetId = "") {
+    return assetLibrary.value.find((item) => item.id === assetId) ?? null;
+}
+
+function getAssetUsageInfo(assetId = "") {
+    return (
+        assetUsageMap.value[assetId] ?? {
+            currentProjectUsed: 0,
+            currentProjectEntries: [],
+            currentProjectEntryCount: 0,
+            projectRecordEntries: [],
+            projectRecordCount: 0,
+            projectRecordEntryCount: 0,
+            publishedSnapshotEntries: [],
+            publishedSnapshotCount: 0,
+            publishedSnapshotEntryCount: 0,
+            total: 0,
+            totalEntries: 0,
+            totalScopes: 0,
+        }
+    );
+}
+
+function getAssetUsageSections(assetId = "") {
+    const usage = getAssetUsageInfo(assetId);
+
+    return [
+        {
+            key: "current-project",
+            label: "当前项目",
+            entries: usage.currentProjectEntries,
+        },
+        {
+            key: "project-record",
+            label: "项目快照",
+            entries: usage.projectRecordEntries,
+        },
+        {
+            key: "published-snapshot",
+            label: "发布版本",
+            entries: usage.publishedSnapshotEntries,
+        },
+    ].filter((section) => section.entries.length > 0);
+}
+
+function buildAssetUsageLabel(assetId = "") {
+    const usage = getAssetUsageInfo(assetId);
+
+    if (!usage.total) {
+        return "未被当前项目、快照或发布版本引用";
+    }
+
+    return [
+        usage.currentProjectEntryCount
+            ? `当前项目 ${usage.currentProjectEntryCount} 处`
+            : "",
+        usage.projectRecordEntryCount
+            ? `项目快照 ${usage.projectRecordCount} 版 / ${usage.projectRecordEntryCount} 处`
+            : "",
+        usage.publishedSnapshotEntryCount
+            ? `发布版本 ${usage.publishedSnapshotCount} 版 / ${usage.publishedSnapshotEntryCount} 处`
+            : "",
+    ]
+        .filter(Boolean)
+        .join(" · ");
+}
+
+function resetExpandedAssetUsageIds() {
+    expandedAssetUsageIds.value = [];
+}
+
+function isAssetUsageExpanded(assetId = "") {
+    return expandedAssetUsageIds.value.includes(String(assetId || "").trim());
+}
+
+function toggleAssetUsageExpanded(assetId = "") {
+    const normalizedId = String(assetId || "").trim();
+
+    if (!normalizedId) {
+        return false;
+    }
+
+    const nextIds = new Set(expandedAssetUsageIds.value);
+
+    if (nextIds.has(normalizedId)) {
+        nextIds.delete(normalizedId);
+    } else {
+        nextIds.add(normalizedId);
+    }
+
+    expandedAssetUsageIds.value = Array.from(nextIds);
+    return true;
+}
+
+function buildAssetUsageToggleLabel(assetId = "") {
+    const usage = getAssetUsageInfo(assetId);
+
+    if (!usage.totalEntries) {
+        return "查看引用";
+    }
+
+    return isAssetUsageExpanded(assetId)
+        ? "收起引用"
+        : `查看引用（${usage.totalEntries} 处）`;
+}
+
+function canLocateAssetUsageEntry(entry = {}) {
+    const scopeType = String(entry?.scopeType || "").trim();
+    const locationType = String(entry?.locationType || "").trim();
+
+    if (scopeType === "published-snapshot") {
+        return Boolean(String(entry?.scopeId || "").trim());
+    }
+
+    return (
+        (scopeType === "current-project" || scopeType === "project-record") &&
+        (locationType === "page" || locationType === "widget")
+    );
+}
+
+function getAssetUsageEntryActionLabel(entry = {}) {
+    const scopeType = String(entry?.scopeType || "").trim();
+    const locationType = String(entry?.locationType || "").trim();
+    const needOpenProject =
+        scopeType === "project-record" &&
+        String(entry?.scopeId || "").trim() !== activeProjectRecordId.value;
+
+    if (scopeType === "published-snapshot") {
+        return "查看版本";
+    }
+
+    if (locationType === "page") {
+        return needOpenProject ? "打开页面" : "定位页面";
+    }
+
+    return needOpenProject ? "打开定位" : "定位组件";
+}
+
+function prepareAssetUsageEditorLocation() {
+    if (isRuntimeMode.value) {
+        appMode.value = "editor";
+        runtimePageId.value = "";
+    }
+
+    if (previewMode.value) {
+        previewMode.value = false;
+    }
+}
+
+function locateAssetUsageInCurrentProject(entry = {}) {
+    const locationType = String(entry?.locationType || "").trim();
+    const pageId = String(entry?.pageId || "").trim();
+    const targetPage = pageId
+        ? project.value.pages.find((page) => page.id === pageId) ?? null
+        : null;
+
+    if (locationType === "page") {
+        if (!targetPage) {
+            statusMessage.value = "目标页面不存在，可能已经被删除";
+            return false;
+        }
+
+        prepareAssetUsageEditorLocation();
+
+        if (project.value.activePageId !== targetPage.id) {
+            switchPage(targetPage.id);
+        }
+
+        sanitizeSelection([], null);
+        statusMessage.value = `已定位到页面：${targetPage.name}`;
+        return true;
+    }
+
+    if (locationType !== "widget") {
+        statusMessage.value = "当前引用类型暂不支持直接定位";
+        return false;
+    }
+
+    const widgetId = String(entry?.widgetId || "").trim();
+    const targetWidget = targetPage?.widgets.find(
+        (widget) => widget.id === widgetId,
+    ) ?? null;
+
+    if (!targetPage || !targetWidget) {
+        statusMessage.value = "引用组件不存在，可能已经被删除";
+        return false;
+    }
+
+    prepareAssetUsageEditorLocation();
+
+    if (project.value.activePageId !== targetPage.id) {
+        switchPage(targetPage.id);
+    }
+
+    sanitizeSelection([targetWidget.id], targetWidget.id);
+    flashLinkedWidgets([targetWidget.id]);
+    statusMessage.value = `已定位到 ${targetPage.name} / ${targetWidget.name}`;
+    return true;
+}
+
+async function locateAssetUsageEntry(entry = {}) {
+    if (!canLocateAssetUsageEntry(entry)) {
+        statusMessage.value = "当前引用项暂不支持直接定位";
+        return false;
+    }
+
+    const scopeType = String(entry?.scopeType || "").trim();
+
+    if (scopeType === "published-snapshot") {
+        const snapshot =
+            publishedSnapshots.value.find(
+                (item) => item.id === entry.scopeId,
+            ) ?? null;
+
+        if (!snapshot) {
+            statusMessage.value = "关联发布版本不存在，无法定位";
+            return false;
+        }
+
+        if (
+            snapshot.projectRecordId &&
+            snapshot.projectRecordId !== activeProjectRecordId.value
+        ) {
+            const targetRecord =
+                projectLibrary.value.find(
+                    (item) => item.id === snapshot.projectRecordId,
+                ) ?? null;
+
+            if (!targetRecord) {
+                statusMessage.value = "关联项目已不存在，无法打开对应发布版本";
+                return false;
+            }
+
+            openProjectRecord(snapshot.projectRecordId, {
+                statusMessage: "",
+            });
+            await nextTick();
+        }
+
+        const visibleSnapshot =
+            currentProjectPublishedSnapshotLibrary.value.find(
+                (item) => item.id === snapshot.id,
+            ) ?? null;
+
+        if (!visibleSnapshot) {
+            statusMessage.value = "当前发布版本不在活动项目下，暂时无法定位";
+            return false;
+        }
+
+        openPublishManagerDialog();
+        publishDiffSnapshotId.value = snapshot.id;
+        approvalTimelineSnapshotId.value = "";
+        pendingRollbackSnapshotId.value = "";
+        setSelectedPublishedSnapshotIds(
+            [snapshot.id],
+            currentProjectPublishedSnapshotLibrary.value,
+        );
+        statusMessage.value = `已定位到发布版本：${snapshot.name}`;
+        return true;
+    }
+
+    if (
+        scopeType === "project-record" &&
+        entry.scopeId &&
+        entry.scopeId !== activeProjectRecordId.value
+    ) {
+        const targetRecord =
+            projectLibrary.value.find((item) => item.id === entry.scopeId) ?? null;
+
+        if (!targetRecord) {
+            statusMessage.value = "关联项目快照不存在，无法定位";
+            return false;
+        }
+
+        openProjectRecord(entry.scopeId, {
+            statusMessage: "",
+        });
+        await nextTick();
+        return locateAssetUsageInCurrentProject(entry);
+    }
+
+    closeDialog();
+    await nextTick();
+    return locateAssetUsageInCurrentProject(entry);
+}
+
+function getMissingAssetReferenceEntries(assetId = "") {
+    const normalizedId = String(assetId || "").trim();
+    return missingAssetReferenceEntriesByAssetId.value[normalizedId] ?? [];
+}
+
+function getMissingAssetReferenceRepairCount(assetId = "") {
+    return getMissingAssetReferenceEntries(assetId).length;
+}
+
+function inferMissingAssetExpectedKinds(entries = []) {
+    const expectedKinds = new Set();
+
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
+        const widgetType = String(entry?.widgetType || "").trim();
+        const fieldPaths = Array.isArray(entry?.fieldPaths)
+            ? entry.fieldPaths
+            : [];
+
+        if (widgetType === "image") {
+            expectedKinds.add("image");
+            return;
+        }
+
+        if (widgetType === "video") {
+            if (fieldPaths.some((path) => /poster/i.test(path))) {
+                expectedKinds.add("image");
+            }
+
+            if (
+                fieldPaths.some(
+                    (path) => /(^|\.)(src|source|url)(\[|\]|\.|$)/i.test(path),
+                )
+            ) {
+                expectedKinds.add("video");
+            }
+        }
+    });
+
+    return Array.from(expectedKinds);
+}
+
+function getMissingAssetReferenceExpectedKinds(assetId = "") {
+    return inferMissingAssetExpectedKinds(
+        getMissingAssetReferenceEntries(assetId),
+    );
+}
+
+function getMissingAssetRepairAccept(entry = {}) {
+    const expectedKinds = getMissingAssetReferenceExpectedKinds(entry?.assetId);
+
+    if (expectedKinds.length === 1) {
+        return expectedKinds[0] === "image" ? "image/*" : "video/*";
+    }
+
+    return "image/*,video/*";
+}
+
+function buildMissingAssetRepairHint(entry = {}) {
+    const expectedKinds = getMissingAssetReferenceExpectedKinds(entry?.assetId);
+
+    if (expectedKinds.length === 1) {
+        return expectedKinds[0] === "image"
+            ? "建议上传图片文件进行回填"
+            : "建议上传视频文件进行回填";
+    }
+
+    return "支持上传图片或视频文件回填";
+}
+
+async function handleMissingAssetRepairUpload(entry = {}, event) {
+    const input = event?.target ?? null;
+    const file = Array.from(input?.files ?? [])[0] ?? null;
+    const assetId = String(
+        entry?.assetId || parseAssetReference(entry?.reference),
+    ).trim();
+    const relatedEntryCount = getMissingAssetReferenceRepairCount(assetId);
+    const relatedExpectedKinds = getMissingAssetReferenceExpectedKinds(assetId);
+
+    if (!assetId) {
+        statusMessage.value = "缺失资源标识无效，暂时无法修复";
+
+        if (input) {
+            input.value = "";
+        }
+
+        return false;
+    }
+
+    if (!(file instanceof File)) {
+        return false;
+    }
+
+    const kind = inferAssetKind(file);
+
+    if (!kind) {
+        statusMessage.value = "仅支持上传图片或视频文件修复缺失资源";
+
+        if (input) {
+            input.value = "";
+        }
+
+        return false;
+    }
+
+    if (
+        relatedExpectedKinds.length === 1 &&
+        !relatedExpectedKinds.includes(kind)
+    ) {
+        statusMessage.value =
+            relatedExpectedKinds[0] === "image"
+                ? "该缺失引用更像是图片资源，请上传图片文件修复"
+                : "该缺失引用更像是视频资源，请上传视频文件修复";
+
+        if (input) {
+            input.value = "";
+        }
+
+        return false;
+    }
+
+    if (getAssetById(assetId)) {
+        await loadAssetLibrary({ silent: true });
+        statusMessage.value = "资源已经存在，异常引用列表已同步刷新";
+
+        if (input) {
+            input.value = "";
+        }
+
+        return true;
+    }
+
+    const now = Date.now();
+
+    assetLibraryLoading.value = true;
+
+    try {
+        await putAssetRecords([
+            {
+                id: assetId,
+                name:
+                    String(file.name || "").trim() ||
+                    `${kind === "image" ? "图片" : "视频"}修复-${assetId.slice(-6)}`,
+                kind,
+                mimeType: String(file.type || "").trim(),
+                size: Math.max(0, Number(file.size) || 0),
+                tags: ["缺失修复"],
+                createdAt: now,
+                updatedAt: now,
+                blob: file,
+            },
+        ]);
+        const records = await loadAssetLibrary({ silent: true });
+        setSelectedAssetIds([assetId], records);
+        statusMessage.value = relatedEntryCount
+            ? `已修复缺失资源 ${entry.reference}，恢复 ${relatedEntryCount} 处引用`
+            : `已修复缺失资源 ${entry.reference}`;
+        return true;
+    } catch (error) {
+        statusMessage.value = "缺失资源修复失败，请稍后重试";
+        console.warn(error);
+        return false;
+    } finally {
+        assetLibraryLoading.value = false;
+
+        if (input) {
+            input.value = "";
+        }
+    }
+}
+
+function resetAssetLibraryFilters() {
+    assetLibrarySearchKeyword.value = "";
+    assetLibraryFilterKind.value = ASSET_KIND_OPTIONS[0].value;
+    assetLibraryFilterTag.value = "all";
+}
+
+function resetAssetBatchTagDraft() {
+    assetBatchTagMode.value = ASSET_BATCH_TAG_MODE_OPTIONS[0].value;
+    assetBatchTagDraft.value = "";
+}
+
+function resetAssetLibraryViewState() {
+    assetLibraryViewMode.value = ASSET_LIBRARY_VIEW_MODE_OPTIONS[0].value;
+    collapsedAssetGroupKeys.value = [];
+}
+
+function normalizeSelectedAssetIds(
+    assetIds,
+    assetCollection = assetLibrary.value,
+) {
+    const allowedIds = new Set(
+        (Array.isArray(assetCollection) ? assetCollection : []).map(
+            (item) => item.id,
+        ),
+    );
+
+    return Array.from(
+        new Set(
+            (Array.isArray(assetIds) ? assetIds : [])
+                .map((item) => String(item || "").trim())
+                .filter((id) => allowedIds.has(id)),
+        ),
+    );
+}
+
+function setSelectedAssetIds(assetIds, assetCollection = assetLibrary.value) {
+    selectedAssetIds.value = normalizeSelectedAssetIds(
+        assetIds,
+        assetCollection,
+    );
+}
+
+function clearAssetSelection() {
+    selectedAssetIds.value = [];
+}
+
+function cancelAssetRename() {
+    assetEditingId.value = "";
+    assetDraftName.value = "";
+}
+
+function cancelAssetTagEdit() {
+    assetTagEditingId.value = "";
+    assetTagDraftValue.value = "";
+}
+
+function setAssetLibraryTagFilter(tag = "all") {
+    const normalizedTag = String(tag || "").trim();
+    assetLibraryFilterTag.value = normalizedTag || "all";
+}
+
+function setAssetLibraryViewMode(mode = ASSET_LIBRARY_VIEW_MODE_OPTIONS[0].value) {
+    const normalizedMode = String(mode || "").trim();
+    const nextMode = ASSET_LIBRARY_VIEW_MODE_OPTIONS.some(
+        (option) => option.value === normalizedMode,
+    )
+        ? normalizedMode
+        : ASSET_LIBRARY_VIEW_MODE_OPTIONS[0].value;
+
+    assetLibraryViewMode.value = nextMode;
+
+    if (nextMode !== "grouped") {
+        collapsedAssetGroupKeys.value = [];
+    }
+}
+
+function toggleAssetGroupCollapsed(groupKey) {
+    const normalizedKey = String(groupKey || "").trim();
+
+    if (!normalizedKey) {
+        return false;
+    }
+
+    const currentKeys = new Set(collapsedAssetGroupKeys.value);
+
+    if (currentKeys.has(normalizedKey)) {
+        currentKeys.delete(normalizedKey);
+    } else {
+        currentKeys.add(normalizedKey);
+    }
+
+    collapsedAssetGroupKeys.value = Array.from(currentKeys);
+    return true;
+}
+
+function collapseAllAssetGroups() {
+    collapsedAssetGroupKeys.value = assetLibraryGroupedSections.value.map(
+        (section) => section.key,
+    );
+    return true;
+}
+
+function expandAllAssetGroups() {
+    collapsedAssetGroupKeys.value = [];
+    return true;
+}
+
+function syncAssetPreviewUrlMap(records = assetLibrary.value) {
+    const nextMap = {};
+    const activeIds = new Set();
+
+    records.forEach((asset) => {
+        if (!asset?.id) {
+            return;
+        }
+
+        activeIds.add(asset.id);
+
+        if (!(asset.blob instanceof Blob)) {
+            return;
+        }
+
+        const cached = assetObjectUrlRegistry.get(asset.id);
+
+        if (
+            !cached ||
+            cached.updatedAt !== asset.updatedAt ||
+            cached.size !== asset.size
+        ) {
+            if (cached?.objectUrl) {
+                URL.revokeObjectURL(cached.objectUrl);
+            }
+
+            assetObjectUrlRegistry.set(asset.id, {
+                objectUrl: URL.createObjectURL(asset.blob),
+                updatedAt: asset.updatedAt,
+                size: asset.size,
+            });
+        }
+
+        nextMap[asset.id] = assetObjectUrlRegistry.get(asset.id)?.objectUrl ?? "";
+    });
+
+    Array.from(assetObjectUrlRegistry.keys()).forEach((assetId) => {
+        if (activeIds.has(assetId)) {
+            return;
+        }
+
+        const cached = assetObjectUrlRegistry.get(assetId);
+
+        if (cached?.objectUrl) {
+            URL.revokeObjectURL(cached.objectUrl);
+        }
+
+        assetObjectUrlRegistry.delete(assetId);
+    });
+
+    assetPreviewUrlMap.value = nextMap;
+}
+
+function revokeAllAssetPreviewUrls() {
+    assetObjectUrlRegistry.forEach((entry) => {
+        if (entry?.objectUrl) {
+            URL.revokeObjectURL(entry.objectUrl);
+        }
+    });
+    assetObjectUrlRegistry.clear();
+    assetPreviewUrlMap.value = {};
+}
+
+async function loadAssetLibrary(options = {}) {
+    const currentToken = ++assetLibraryLoadToken;
+    assetLibraryLoading.value = true;
+
+    try {
+        const records = await listAssetRecords();
+
+        if (currentToken !== assetLibraryLoadToken) {
+            return records;
+        }
+
+        assetLibrary.value = records;
+        setSelectedAssetIds(selectedAssetIds.value, records);
+        syncAssetPreviewUrlMap(records);
+        assetLibraryReady.value = true;
+        return records;
+    } catch (error) {
+        if (!options.silent) {
+            statusMessage.value = "本地资源中心读取失败，请稍后重试";
+        }
+        console.warn(error);
+        return [];
+    } finally {
+        if (currentToken === assetLibraryLoadToken) {
+            assetLibraryLoading.value = false;
+        }
+    }
+}
+
+function openAssetLibraryDialog() {
+    clearAssetSelection();
+    resetAssetBatchTagDraft();
+    resetAssetLibraryViewState();
+    cancelAssetRename();
+    cancelAssetTagEdit();
+    resetAssetLibraryFilters();
+    dialogMode.value = "asset-library";
+    void loadAssetLibrary();
+}
+
+async function handleAssetLibraryUpload(event) {
+    const input = event?.target ?? null;
+    const files = Array.from(input?.files ?? []);
+
+    if (!files.length) {
+        return false;
+    }
+
+    const now = Date.now();
+    const records = [];
+    const skippedFiles = [];
+
+    files.forEach((file, index) => {
+        const kind = inferAssetKind(file);
+
+        if (!kind) {
+            skippedFiles.push(file.name || `文件 ${index + 1}`);
+            return;
+        }
+
+        records.push({
+            id: createAssetId(),
+            name: String(file.name || `${kind}-${index + 1}`).trim(),
+            kind,
+            mimeType: file.type || "",
+            size: Number(file.size) || 0,
+            createdAt: now + index,
+            updatedAt: now + index,
+            blob: file,
+        });
+    });
+
+    if (!records.length) {
+        statusMessage.value = "仅支持上传图片和视频资源";
+
+        if (input) {
+            input.value = "";
+        }
+
+        return false;
+    }
+
+    assetLibraryLoading.value = true;
+
+    try {
+        await putAssetRecords(records);
+        await loadAssetLibrary({ silent: true });
+        assetLibraryUploadInputKey.value += 1;
+        statusMessage.value = skippedFiles.length
+            ? `已导入 ${records.length} 个资源，跳过 ${skippedFiles.length} 个不支持的文件`
+            : `已导入 ${records.length} 个资源`;
+        return true;
+    } catch (error) {
+        statusMessage.value = "资源上传失败，请稍后重试";
+        console.warn(error);
+        return false;
+    } finally {
+        assetLibraryLoading.value = false;
+
+        if (input) {
+            input.value = "";
+        }
+    }
+}
+
+function startAssetRename(assetId) {
+    const asset = getAssetById(assetId);
+
+    if (!asset) {
+        statusMessage.value = "资源不存在，无法重命名";
+        return false;
+    }
+
+    cancelAssetTagEdit();
+    assetEditingId.value = asset.id;
+    assetDraftName.value = asset.name;
+
+    void nextTick(() => {
+        const input = document.querySelector(
+            `[data-asset-rename-input="${asset.id}"]`,
+        );
+
+        if (input instanceof HTMLInputElement) {
+            input.focus();
+            input.select();
+        }
+    });
+
+    return true;
+}
+
+function startAssetTagEdit(assetId) {
+    const asset = getAssetById(assetId);
+
+    if (!asset) {
+        statusMessage.value = "资源不存在，无法编辑标签";
+        return false;
+    }
+
+    cancelAssetRename();
+    assetTagEditingId.value = asset.id;
+    assetTagDraftValue.value = Array.isArray(asset.tags)
+        ? asset.tags.join(", ")
+        : "";
+
+    void nextTick(() => {
+        const input = document.querySelector(
+            `[data-asset-tag-input="${asset.id}"]`,
+        );
+
+        if (input instanceof HTMLInputElement) {
+            input.focus();
+            input.select();
+        }
+    });
+
+    return true;
+}
+
+async function renameAssetInLibrary(assetId) {
+    const asset = getAssetById(assetId);
+
+    if (!asset) {
+        statusMessage.value = "资源不存在，无法重命名";
+        return false;
+    }
+
+    const nextName = assetDraftName.value.trim();
+
+    if (!nextName) {
+        statusMessage.value = "资源名称不能为空";
+        return false;
+    }
+
+    if (nextName === asset.name) {
+        cancelAssetRename();
+        return true;
+    }
+
+    assetLibraryLoading.value = true;
+
+    try {
+        await putAssetRecords([
+            {
+                ...asset,
+                name: nextName,
+                updatedAt: Date.now(),
+            },
+        ]);
+        await loadAssetLibrary({ silent: true });
+        cancelAssetRename();
+        statusMessage.value = `已重命名资源：${nextName}`;
+        return true;
+    } catch (error) {
+        statusMessage.value = "资源重命名失败，请稍后重试";
+        console.warn(error);
+        return false;
+    } finally {
+        assetLibraryLoading.value = false;
+    }
+}
+
+async function saveAssetTags(assetId) {
+    const asset = getAssetById(assetId);
+
+    if (!asset) {
+        statusMessage.value = "资源不存在，无法保存标签";
+        return false;
+    }
+
+    const nextTags = normalizeAssetTags(assetTagDraftValue.value);
+    const currentTags = Array.isArray(asset.tags) ? asset.tags : [];
+
+    if (JSON.stringify(nextTags) === JSON.stringify(currentTags)) {
+        cancelAssetTagEdit();
+        return true;
+    }
+
+    assetLibraryLoading.value = true;
+
+    try {
+        await putAssetRecords([
+            {
+                ...asset,
+                tags: nextTags,
+                updatedAt: Date.now(),
+            },
+        ]);
+        await loadAssetLibrary({ silent: true });
+
+        if (
+            assetLibraryFilterTag.value !== "all" &&
+            !nextTags.includes(assetLibraryFilterTag.value)
+        ) {
+            assetLibraryFilterTag.value = "all";
+        }
+
+        cancelAssetTagEdit();
+        statusMessage.value = nextTags.length
+            ? `已更新资源标签：${asset.name}`
+            : `已清空资源标签：${asset.name}`;
+        return true;
+    } catch (error) {
+        statusMessage.value = "资源标签保存失败，请稍后重试";
+        console.warn(error);
+        return false;
+    } finally {
+        assetLibraryLoading.value = false;
+    }
+}
+
+async function handleAssetReplacement(assetId, event) {
+    const input = event?.target ?? null;
+    const file = Array.from(input?.files ?? [])[0] ?? null;
+    const asset = getAssetById(assetId);
+
+    if (!asset) {
+        statusMessage.value = "资源不存在，无法替换";
+
+        if (input) {
+            input.value = "";
+        }
+
+        return false;
+    }
+
+    if (!(file instanceof File)) {
+        return false;
+    }
+
+    const nextKind = inferAssetKind(file);
+
+    if (!nextKind) {
+        statusMessage.value = "仅支持使用图片或视频文件替换资源";
+
+        if (input) {
+            input.value = "";
+        }
+
+        return false;
+    }
+
+    if (nextKind !== asset.kind) {
+        statusMessage.value =
+            asset.kind === "image"
+                ? "图片资源只能替换为图片文件"
+                : "视频资源只能替换为视频文件";
+
+        if (input) {
+            input.value = "";
+        }
+
+        return false;
+    }
+
+    assetLibraryLoading.value = true;
+
+    try {
+        await putAssetRecords([
+            {
+                ...asset,
+                mimeType: String(file.type || "").trim() || asset.mimeType,
+                size: Number(file.size) || 0,
+                updatedAt: Date.now(),
+                blob: file,
+            },
+        ]);
+        await loadAssetLibrary({ silent: true });
+        statusMessage.value = `已替换资源文件：${asset.name}`;
+        return true;
+    } catch (error) {
+        statusMessage.value = "资源替换失败，请稍后重试";
+        console.warn(error);
+        return false;
+    } finally {
+        assetLibraryLoading.value = false;
+
+        if (input) {
+            input.value = "";
+        }
+    }
+}
+
+function toggleAssetSelection(assetId) {
+    const currentSelection = new Set(
+        normalizeSelectedAssetIds(selectedAssetIds.value),
+    );
+
+    if (currentSelection.has(assetId)) {
+        currentSelection.delete(assetId);
+    } else {
+        currentSelection.add(assetId);
+    }
+
+    setSelectedAssetIds(Array.from(currentSelection));
+}
+
+function toggleAllFilteredAssetsSelection() {
+    const filteredIds = filteredAssetLibrary.value.map((item) => item.id);
+
+    if (!filteredIds.length) {
+        return false;
+    }
+
+    const currentSelection = new Set(
+        normalizeSelectedAssetIds(selectedAssetIds.value),
+    );
+
+    if (isAllFilteredAssetsSelected.value) {
+        filteredIds.forEach((id) => currentSelection.delete(id));
+    } else {
+        filteredIds.forEach((id) => currentSelection.add(id));
+    }
+
+    setSelectedAssetIds(Array.from(currentSelection));
+    return true;
+}
+
+async function copyAssetReference(assetId) {
+    const asset = getAssetById(assetId);
+
+    if (!asset) {
+        statusMessage.value = "资源不存在，无法复制引用";
+        return false;
+    }
+
+    return copyTextToClipboard(asset.reference, {
+        successMessage: `已复制资源引用：${asset.name}`,
+        failureMessage: "资源引用复制失败，请稍后重试",
+        emptyMessage: "当前没有可复制的资源引用",
+    });
+}
+
+function buildAssetReferenceClipboardText(assets) {
+    const normalizedAssets = (Array.isArray(assets) ? assets : []).filter(Boolean);
+
+    return [
+        `项目：${currentProjectName.value}`,
+        `生成时间：${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+        ...normalizedAssets.map((asset, index) =>
+            [
+                `${index + 1}. ${asset.name} · ${getAssetKindLabel(asset.kind)}`,
+                asset.reference,
+            ].join("\n"),
+        ),
+    ].join("\n\n");
+}
+
+async function copySelectedAssetReferences() {
+    if (!selectedAssetLibrary.value.length) {
+        statusMessage.value = "请先选择要复制引用的资源";
+        return false;
+    }
+
+    return copyTextToClipboard(
+        buildAssetReferenceClipboardText(selectedAssetLibrary.value),
+        {
+            successMessage: `已复制 ${selectedAssetLibrary.value.length} 个资源引用`,
+            failureMessage: "批量复制资源引用失败，请稍后重试",
+            emptyMessage: "当前没有可复制的资源引用",
+        },
+    );
+}
+
+function addAssetWidgetToCanvas(assetId) {
+    const asset = getAssetById(assetId);
+
+    if (!asset || !currentPage.value) {
+        statusMessage.value = "资源不存在，无法插入组件";
+        return false;
+    }
+
+    const widgetType = asset.kind === "video" ? "video" : "image";
+    const nextWidget = createWidget(widgetType, {
+        name: `${getAssetKindLabel(asset.kind)} · ${getAssetBaseName(asset.name) || asset.name}`,
+        x: clamp(
+            Math.round(
+                currentCanvas.value.meta.screenWidth / 2 -
+                    materials[widgetType].size.w / 2,
+            ),
+            0,
+            Math.max(
+                currentCanvas.value.meta.screenWidth -
+                    materials[widgetType].size.w,
+                0,
+            ),
+        ),
+        y: clamp(
+            Math.round(
+                currentCanvas.value.meta.screenHeight / 2 -
+                    materials[widgetType].size.h / 2,
+            ),
+            0,
+            Math.max(
+                currentCanvas.value.meta.screenHeight -
+                    materials[widgetType].size.h,
+                0,
+            ),
+        ),
+        zIndex: getNextZIndex(currentWidgets.value),
+        props:
+            widgetType === "image"
+                ? {
+                      src: asset.reference,
+                      alt: getAssetBaseName(asset.name) || asset.name,
+                      caption: getAssetBaseName(asset.name),
+                      showCaption: false,
+                  }
+                : {
+                      src: asset.reference,
+                      title: getAssetBaseName(asset.name) || asset.name,
+                      poster: "",
+                      autoplay: false,
+                      muted: true,
+                  },
+    });
+
+    queueHistoryLabel("插入资源组件");
+    currentWidgets.value.push(nextWidget);
+    sortWidgets(currentWidgets.value);
+    sanitizeSelection([nextWidget.id], nextWidget.id);
+    statusMessage.value = `已插入${getAssetKindLabel(asset.kind)}组件：${asset.name}`;
+    return true;
+}
+
+function canApplyAssetToSelectedWidget(asset) {
+    if (!asset || !selectedWidgetCanReceiveAsset.value) {
+        return false;
+    }
+
+    if (selectedWidgetAssetTargetMode.value === "image") {
+        return asset.kind === "image";
+    }
+
+    if (selectedWidgetAssetTargetMode.value === "video") {
+        return asset.kind === "video";
+    }
+
+    return false;
+}
+
+function canApplyAssetAsVideoPoster(asset) {
+    return (
+        Boolean(asset) &&
+        selectedWidgetCanReceiveAsset.value &&
+        selectedWidgetAssetTargetMode.value === "video" &&
+        asset.kind === "image"
+    );
+}
+
+function applyAssetToSelectedWidget(assetId, options = {}) {
+    const asset = getAssetById(assetId);
+    const widgetId = selectedWidget.value?.id ?? "";
+    const widget =
+        currentWidgets.value.find((item) => item.id === widgetId) ?? null;
+
+    if (!asset || !widget) {
+        statusMessage.value = "当前没有可应用的目标组件";
+        return false;
+    }
+
+    if (widget.locked) {
+        statusMessage.value = "当前组件已锁定，解锁后可应用资源";
+        return false;
+    }
+
+    const assetBaseName = getAssetBaseName(asset.name) || asset.name;
+    const applyPoster = options.mode === "poster";
+
+    if (widget.type === "image" && asset.kind !== "image") {
+        statusMessage.value = "图片组件只能应用图片资源";
+        return false;
+    }
+
+    if (widget.type === "video" && applyPoster && asset.kind !== "image") {
+        statusMessage.value = "视频封面只能应用图片资源";
+        return false;
+    }
+
+    if (widget.type === "video" && !applyPoster && asset.kind !== "video") {
+        statusMessage.value = "视频组件只能应用视频资源";
+        return false;
+    }
+
+    queueHistoryLabel(applyPoster ? "应用视频封面" : "应用资源");
+
+    if (widget.type === "image") {
+        widget.props = {
+            ...widget.props,
+            src: asset.reference,
+            alt: String(widget.props.alt || "").trim() || assetBaseName,
+            caption: String(widget.props.caption || "").trim() || assetBaseName,
+        };
+        statusMessage.value = `已将图片资源应用到组件：${widget.name}`;
+        return true;
+    }
+
+    widget.props = applyPoster
+        ? {
+              ...widget.props,
+              poster: asset.reference,
+              title: String(widget.props.title || "").trim() || assetBaseName,
+          }
+        : {
+              ...widget.props,
+              src: asset.reference,
+              title: String(widget.props.title || "").trim() || assetBaseName,
+          };
+    statusMessage.value = applyPoster
+        ? `已更新视频封面：${widget.name}`
+        : `已将视频资源应用到组件：${widget.name}`;
+    return true;
+}
+
+async function deleteAssetFromLibraryById(assetId) {
+    const asset = getAssetById(assetId);
+    const usage = getAssetUsageInfo(assetId);
+
+    if (!asset) {
+        statusMessage.value = "资源不存在，无法删除";
+        return false;
+    }
+
+    if (usage.total > 0) {
+        statusMessage.value = `${asset.name} 仍被项目或发布版本引用，请先替换后再删除`;
+        return false;
+    }
+
+    try {
+        await deleteAssetRecord(assetId);
+        assetLibrary.value = assetLibrary.value.filter((item) => item.id !== assetId);
+        setSelectedAssetIds(
+            selectedAssetIds.value.filter((id) => id !== assetId),
+            assetLibrary.value,
+        );
+        syncAssetPreviewUrlMap(assetLibrary.value);
+        if (assetEditingId.value === assetId) {
+            cancelAssetRename();
+        }
+        if (assetTagEditingId.value === assetId) {
+            cancelAssetTagEdit();
+        }
+        statusMessage.value = `已删除资源：${asset.name}`;
+        return true;
+    } catch (error) {
+        statusMessage.value = "资源删除失败，请稍后重试";
+        console.warn(error);
+        return false;
+    }
+}
+
+async function batchDeleteSelectedAssets() {
+    if (!selectedAssetLibrary.value.length) {
+        statusMessage.value = "请先选择要删除的资源";
+        return false;
+    }
+
+    const deletableAssets = selectedAssetLibrary.value.filter(
+        (asset) => getAssetUsageInfo(asset.id).total === 0,
+    );
+    const skippedReferencedCount =
+        selectedAssetLibrary.value.length - deletableAssets.length;
+
+    if (!deletableAssets.length) {
+        statusMessage.value = "所选资源仍被项目或发布版本引用，请先替换后再删除";
+        return false;
+    }
+
+    assetLibraryLoading.value = true;
+
+    try {
+        await Promise.all(
+            deletableAssets.map((asset) => deleteAssetRecord(asset.id)),
+        );
+
+        const deletedIds = new Set(deletableAssets.map((asset) => asset.id));
+        const nextAssets = assetLibrary.value.filter(
+            (asset) => !deletedIds.has(asset.id),
+        );
+
+        assetLibrary.value = nextAssets;
+        setSelectedAssetIds(
+            selectedAssetIds.value.filter((id) => !deletedIds.has(id)),
+            nextAssets,
+        );
+        syncAssetPreviewUrlMap(nextAssets);
+
+        if (deletedIds.has(assetEditingId.value)) {
+            cancelAssetRename();
+        }
+        if (deletedIds.has(assetTagEditingId.value)) {
+            cancelAssetTagEdit();
+        }
+
+        statusMessage.value = skippedReferencedCount
+            ? `已删除 ${deletableAssets.length} 个资源，跳过 ${skippedReferencedCount} 个已引用资源`
+            : `已批量删除 ${deletableAssets.length} 个资源`;
+        return true;
+    } catch (error) {
+        statusMessage.value = "批量删除资源失败，请稍后重试";
+        console.warn(error);
+        return false;
+    } finally {
+        assetLibraryLoading.value = false;
+    }
+}
+
+async function applyBatchAssetTags() {
+    if (!selectedAssetLibrary.value.length) {
+        statusMessage.value = "请先选择要批量处理标签的资源";
+        return false;
+    }
+
+    const draftTags = normalizeAssetTags(assetBatchTagDraft.value);
+
+    if (assetBatchTagMode.value !== "clear" && !draftTags.length) {
+        statusMessage.value = "请输入至少一个标签后再批量写入";
+        return false;
+    }
+
+    assetLibraryLoading.value = true;
+    cancelAssetTagEdit();
+
+    try {
+        const now = Date.now();
+        const nextRecords = selectedAssetLibrary.value.map((asset, index) => {
+            const currentTags = Array.isArray(asset.tags) ? asset.tags : [];
+            let nextTags = currentTags;
+
+            if (assetBatchTagMode.value === "clear") {
+                nextTags = [];
+            } else if (assetBatchTagMode.value === "replace") {
+                nextTags = draftTags;
+            } else {
+                nextTags = normalizeAssetTags([...currentTags, ...draftTags]);
+            }
+
+            return {
+                ...asset,
+                tags: nextTags,
+                updatedAt: now + index,
+            };
+        });
+
+        await putAssetRecords(nextRecords);
+        const nextAssets = await loadAssetLibrary({ silent: true });
+
+        if (
+            assetLibraryFilterTag.value !== "all" &&
+            !nextAssets.some((asset) =>
+                (Array.isArray(asset.tags) ? asset.tags : []).includes(
+                    assetLibraryFilterTag.value,
+                ),
+            )
+        ) {
+            assetLibraryFilterTag.value = "all";
+        }
+
+        statusMessage.value =
+            assetBatchTagMode.value === "clear"
+                ? `已清空 ${nextRecords.length} 个资源的标签`
+                : assetBatchTagMode.value === "replace"
+                  ? `已覆盖 ${nextRecords.length} 个资源的标签`
+                  : `已为 ${nextRecords.length} 个资源追加标签`;
+        return true;
+    } catch (error) {
+        statusMessage.value = "批量更新资源标签失败，请稍后重试";
+        console.warn(error);
+        return false;
+    } finally {
+        assetLibraryLoading.value = false;
+    }
+}
+
 async function copySourceDebug(payload) {
     const source = project.value.dataSources.find(
         (item) => item.id === payload.sourceId,
@@ -3309,6 +6774,22 @@ function buildAllSourcesExportPayload(sources) {
     );
 }
 
+function persistEditorProjectState(projectData = project.value) {
+    const normalizedProject = normalizeProjectSchema(cloneDeep(projectData));
+
+    rememberProjectSourceSecrets(activeProjectRecordId.value, normalizedProject);
+    const persistedSnapshot = JSON.stringify(
+        sanitizeProjectSourceSecrets(normalizedProject),
+    );
+
+    if (typeof localStorage !== "undefined") {
+        localStorage.setItem(STORAGE_KEY, persistedSnapshot);
+    }
+
+    syncActiveProjectRecord(persistedSnapshot);
+    return persistedSnapshot;
+}
+
 function parseImportedSourceConfigs(text, options = {}) {
     const parsed = JSON.parse(text);
     const rawSources = Array.isArray(parsed)
@@ -3388,6 +6869,1458 @@ function openSourceCreateDialog() {
     dialogText.value = "";
 }
 
+function summarizeProjectStructure(projectData, preferredPageId = "") {
+    const normalizedProject = normalizeProjectSchema(cloneDeep(projectData));
+    const allWidgets = normalizedProject.pages.flatMap((page) =>
+        Array.isArray(page.widgets) ? page.widgets : [],
+    );
+    const pageCount = normalizedProject.pages.length;
+    const widgetCount = allWidgets.length;
+    const entryPageId =
+        typeof preferredPageId === "string" &&
+        normalizedProject.pages.some((page) => page.id === preferredPageId)
+            ? preferredPageId
+            : normalizedProject.activePageId ||
+              normalizedProject.pages[0]?.id ||
+              "";
+    const entryPage =
+        normalizedProject.pages.find((page) => page.id === entryPageId) ??
+        normalizedProject.pages[0] ??
+        null;
+    const widgetTypeMap = allWidgets.reduce((accumulator, widget) => {
+        const type = String(widget?.type || "").trim() || "unknown";
+        accumulator[type] = (accumulator[type] || 0) + 1;
+        return accumulator;
+    }, {});
+    const groupCount = new Set(
+        allWidgets.map((widget) => widget?.groupId).filter(Boolean),
+    ).size;
+    const hiddenWidgetCount = allWidgets.filter((widget) => widget?.hidden).length;
+
+    return {
+        pageCount,
+        widgetCount,
+        sourceCount: normalizedProject.dataSources.length,
+        variableCount: Array.isArray(normalizedProject.runtimeVariablePresets)
+            ? normalizedProject.runtimeVariablePresets.length
+            : 0,
+        hiddenWidgetCount,
+        groupCount,
+        entryPageId,
+        entryPageName: entryPage?.name ?? "未命名页面",
+        screenWidth: Number(entryPage?.meta?.screenWidth) || 0,
+        screenHeight: Number(entryPage?.meta?.screenHeight) || 0,
+        pageNames: normalizedProject.pages
+            .map((page, index) => {
+                const name = String(page?.name || "").trim();
+                return name || `未命名页面 ${index + 1}`;
+            })
+            .filter(Boolean),
+        sourceNames: normalizedProject.dataSources
+            .map((source, index) => {
+                const name = String(source?.name || "").trim();
+                return name || `数据源 ${index + 1}`;
+            })
+            .filter(Boolean),
+        variableNames: Array.isArray(normalizedProject.runtimeVariablePresets)
+            ? normalizedProject.runtimeVariablePresets
+                  .map((preset, index) => {
+                      const key = String(preset?.key || "").trim();
+                      return key || `变量 ${index + 1}`;
+                  })
+                  .filter(Boolean)
+            : [],
+        widgetTypeMap,
+    };
+}
+
+function formatPublishedSnapshotCountDiff(label, previousValue, currentValue) {
+    if (previousValue === currentValue) {
+        return "";
+    }
+
+    const delta = currentValue - previousValue;
+    const sign = delta > 0 ? "+" : "";
+    return `${label} ${previousValue}→${currentValue} (${sign}${delta})`;
+}
+
+function formatPublishedSnapshotDiffList(values, limit = 4) {
+    const normalizedValues = Array.isArray(values)
+        ? values.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+
+    if (!normalizedValues.length) {
+        return "";
+    }
+
+    const visibleItems = normalizedValues.slice(0, limit);
+    return normalizedValues.length > limit
+        ? `${visibleItems.join("、")} 等 ${normalizedValues.length} 项`
+        : visibleItems.join("、");
+}
+
+function buildPublishedSnapshotNamedDiffEntries(
+    label,
+    previousItems,
+    currentItems,
+    limit = 4,
+) {
+    const previousList = Array.from(
+        new Set(
+            (Array.isArray(previousItems) ? previousItems : [])
+                .map((item) => String(item || "").trim())
+                .filter(Boolean),
+        ),
+    ).sort((left, right) => left.localeCompare(right, "zh-CN"));
+    const currentList = Array.from(
+        new Set(
+            (Array.isArray(currentItems) ? currentItems : [])
+                .map((item) => String(item || "").trim())
+                .filter(Boolean),
+        ),
+    ).sort((left, right) => left.localeCompare(right, "zh-CN"));
+    const previousSet = new Set(previousList);
+    const currentSet = new Set(currentList);
+    const addedItems = currentList.filter((item) => !previousSet.has(item));
+    const removedItems = previousList.filter((item) => !currentSet.has(item));
+    const entries = [];
+
+    if (addedItems.length) {
+        entries.push(`${label}新增：${formatPublishedSnapshotDiffList(addedItems, limit)}`);
+    }
+
+    if (removedItems.length) {
+        entries.push(
+            `${label}移除：${formatPublishedSnapshotDiffList(removedItems, limit)}`,
+        );
+    }
+
+    return entries;
+}
+
+function buildPublishedSnapshotMapDiffEntries(
+    label,
+    previousMap,
+    currentMap,
+    options = {},
+) {
+    const previousEntries =
+        previousMap && typeof previousMap === "object" ? previousMap : {};
+    const currentEntries =
+        currentMap && typeof currentMap === "object" ? currentMap : {};
+    const keys = Array.from(
+        new Set([
+            ...Object.keys(previousEntries),
+            ...Object.keys(currentEntries),
+        ]),
+    ).sort((left, right) => left.localeCompare(right, "zh-CN"));
+    const formatKey =
+        typeof options.formatKey === "function"
+            ? options.formatKey
+            : (value) => String(value || "").trim();
+    const limit = Math.max(1, Number(options.limit) || 6);
+    const changes = keys
+        .map((key) => {
+            const previousValue = Number(previousEntries[key]) || 0;
+            const currentValue = Number(currentEntries[key]) || 0;
+
+            if (previousValue === currentValue) {
+                return "";
+            }
+
+            const formattedKey = formatKey(key);
+            return `${formattedKey} ${previousValue}→${currentValue}`;
+        })
+        .filter(Boolean);
+
+    if (!changes.length) {
+        return [];
+    }
+
+    const hiddenCount = Math.max(changes.length - limit, 0);
+    const visibleChanges = changes.slice(0, limit);
+
+    if (hiddenCount > 0) {
+        visibleChanges.push(`${label}其余 ${hiddenCount} 项也有变化`);
+    }
+
+    return visibleChanges;
+}
+
+function buildPublishedSnapshotDiffSummary(snapshot, currentProjectData) {
+    const snapshotProject = normalizeProjectSchema(JSON.parse(snapshot.snapshot));
+    const snapshotSummary = summarizeProjectStructure(
+        snapshotProject,
+        snapshot.pageId,
+    );
+    const currentSummary = summarizeProjectStructure(
+        currentProjectData,
+        currentPageId.value || project.value.activePageId,
+    );
+    const structureEntries = [
+        formatPublishedSnapshotCountDiff(
+            "页面",
+            snapshotSummary.pageCount,
+            currentSummary.pageCount,
+        ),
+        formatPublishedSnapshotCountDiff(
+            "组件",
+            snapshotSummary.widgetCount,
+            currentSummary.widgetCount,
+        ),
+        formatPublishedSnapshotCountDiff(
+            "数据源",
+            snapshotSummary.sourceCount,
+            currentSummary.sourceCount,
+        ),
+        formatPublishedSnapshotCountDiff(
+            "变量",
+            snapshotSummary.variableCount,
+            currentSummary.variableCount,
+        ),
+        formatPublishedSnapshotCountDiff(
+            "隐藏组件",
+            snapshotSummary.hiddenWidgetCount,
+            currentSummary.hiddenWidgetCount,
+        ),
+        formatPublishedSnapshotCountDiff(
+            "编组",
+            snapshotSummary.groupCount,
+            currentSummary.groupCount,
+        ),
+    ].filter(Boolean);
+
+    if (snapshotSummary.entryPageName !== currentSummary.entryPageName) {
+        structureEntries.push(
+            `入口页 ${snapshotSummary.entryPageName}→${currentSummary.entryPageName}`,
+        );
+    }
+
+    if (
+        snapshotSummary.screenWidth !== currentSummary.screenWidth ||
+        snapshotSummary.screenHeight !== currentSummary.screenHeight
+    ) {
+        structureEntries.push(
+            `画布 ${snapshotSummary.screenWidth}×${snapshotSummary.screenHeight}→${currentSummary.screenWidth}×${currentSummary.screenHeight}`,
+        );
+    }
+
+    const pageEntries = buildPublishedSnapshotNamedDiffEntries(
+        "页面",
+        snapshotSummary.pageNames,
+        currentSummary.pageNames,
+        4,
+    );
+    const sourceEntries = buildPublishedSnapshotNamedDiffEntries(
+        "数据源",
+        snapshotSummary.sourceNames,
+        currentSummary.sourceNames,
+        4,
+    );
+    const variableEntries = buildPublishedSnapshotNamedDiffEntries(
+        "变量",
+        snapshotSummary.variableNames,
+        currentSummary.variableNames,
+        4,
+    );
+    const widgetTypeEntries = buildPublishedSnapshotMapDiffEntries(
+        "组件类型",
+        snapshotSummary.widgetTypeMap,
+        currentSummary.widgetTypeMap,
+        {
+            limit: 6,
+            formatKey: (type) =>
+                MATERIAL_LABEL_MAP[type] ??
+                (String(type || "").trim() || "未命名组件"),
+        },
+    );
+    const sections = [
+        {
+            label: "结构规模",
+            entries: structureEntries,
+        },
+        {
+            label: "页面清单",
+            entries: pageEntries,
+        },
+        {
+            label: "组件类型",
+            entries: widgetTypeEntries,
+        },
+        {
+            label: "数据与变量",
+            entries: [...sourceEntries, ...variableEntries],
+        },
+    ].filter((section) => section.entries.length);
+    const entries = sections.flatMap((section) => section.entries);
+
+    return {
+        hasChanges: entries.length > 0,
+        summary: entries.length
+            ? entries.slice(0, 3).join(" · ")
+            : "当前项目与该发布版本结构一致",
+        entries,
+        sections,
+        snapshotSummary,
+        currentSummary,
+    };
+}
+
+function buildPublishedOperationSnapshotNames(snapshotNames) {
+    return Array.from(
+        new Set(
+            (Array.isArray(snapshotNames) ? snapshotNames : [])
+                .map((item) => String(item || "").trim())
+                .filter(Boolean),
+        ),
+    ).slice(0, 12);
+}
+
+function appendPublishedOperationLog(options = {}) {
+    const action =
+        typeof options.action === "string" && options.action.trim()
+            ? options.action.trim()
+            : "unknown";
+    const snapshotIds = Array.from(
+        new Set(
+            (Array.isArray(options.snapshotIds) ? options.snapshotIds : [])
+                .map((item) => String(item || "").trim())
+                .filter(Boolean),
+        ),
+    ).slice(0, 12);
+    const snapshotNames = buildPublishedOperationSnapshotNames(
+        options.snapshotNames,
+    );
+    const createdAt = Number.isFinite(Number(options.createdAt))
+        ? Number(options.createdAt)
+        : Date.now();
+    const actionLabel = formatPublishedOperationActionLabel(action);
+    const nextEntry = {
+        id: createPublishedOperationLogId(),
+        projectRecordId: options.projectRecordId || activeProjectRecordId.value,
+        projectName: options.projectName || currentProjectName.value,
+        action,
+        actionLabel,
+        summary: String(options.summary || "").trim() || actionLabel,
+        detail: String(options.detail || "").trim(),
+        snapshotIds,
+        snapshotNames,
+        createdAt,
+    };
+
+    publishedOperationLogs.value = [nextEntry, ...publishedOperationLogs.value]
+        .sort((left, right) => right.createdAt - left.createdAt)
+        .slice(0, PUBLISHED_OPERATION_LOG_LIMIT);
+    persistPublishedOperationLogLibrary(publishedOperationLogs.value);
+    return nextEntry;
+}
+
+function appendPublishedRollbackLog(snapshot, summary = "") {
+    const nextLog = {
+        id: createPublishedRollbackLogId(),
+        projectRecordId: snapshot.projectRecordId || activeProjectRecordId.value,
+        projectName: snapshot.projectName || currentProjectName.value,
+        snapshotId: snapshot.id,
+        snapshotName: snapshot.name,
+        pageId: snapshot.pageId,
+        pageName: snapshot.pageName,
+        environment: normalizePublishedEnvironment(snapshot.environment),
+        tags: normalizePublishedTagList(snapshot.tags),
+        summary: String(summary || "").trim(),
+        rolledBackAt: Date.now(),
+    };
+
+    publishedRollbackLogs.value = [nextLog, ...publishedRollbackLogs.value]
+        .sort((left, right) => right.rolledBackAt - left.rolledBackAt)
+        .slice(0, PUBLISHED_ROLLBACK_LOG_LIMIT);
+    persistPublishedRollbackLogLibrary(publishedRollbackLogs.value);
+}
+
+function hasCurrentProjectPublishedSnapshot(snapshotId) {
+    return currentProjectPublishedSnapshotIdSet.value.has(snapshotId);
+}
+
+function deletePublishedRollbackLogsByProject(projectRecordId) {
+    if (!projectRecordId) {
+        return;
+    }
+
+    const nextLogs = publishedRollbackLogs.value.filter(
+        (item) => item.projectRecordId !== projectRecordId,
+    );
+
+    if (nextLogs.length === publishedRollbackLogs.value.length) {
+        return;
+    }
+
+    publishedRollbackLogs.value = nextLogs;
+    persistPublishedRollbackLogLibrary(nextLogs);
+}
+
+function deletePublishedRollbackLog(logId) {
+    const log =
+        publishedRollbackLogs.value.find((item) => item.id === logId) ?? null;
+
+    if (!log) {
+        statusMessage.value = "回滚记录不存在，无法删除";
+        return false;
+    }
+
+    const nextLogs = publishedRollbackLogs.value.filter((item) => item.id !== logId);
+    publishedRollbackLogs.value = nextLogs;
+    persistPublishedRollbackLogLibrary(nextLogs);
+    statusMessage.value = `已删除回滚记录：${log.snapshotName}`;
+    return true;
+}
+
+function clearCurrentProjectPublishedRollbackLogs() {
+    if (!currentProjectPublishedRollbackLibrary.value.length) {
+        statusMessage.value = "当前项目暂无回滚记录";
+        return false;
+    }
+
+    const deletedCount = currentProjectPublishedRollbackLibrary.value.length;
+    deletePublishedRollbackLogsByProject(activeProjectRecordId.value);
+    statusMessage.value = `已清空 ${deletedCount} 条回滚记录`;
+    return true;
+}
+
+function deletePublishedOperationLogsByProject(projectRecordId) {
+    if (!projectRecordId) {
+        return;
+    }
+
+    const nextLogs = publishedOperationLogs.value.filter(
+        (item) => item.projectRecordId !== projectRecordId,
+    );
+
+    if (nextLogs.length === publishedOperationLogs.value.length) {
+        return;
+    }
+
+    publishedOperationLogs.value = nextLogs;
+    persistPublishedOperationLogLibrary(nextLogs);
+}
+
+function deletePublishedOperationLog(logId) {
+    const log =
+        publishedOperationLogs.value.find((item) => item.id === logId) ?? null;
+
+    if (!log) {
+        statusMessage.value = "操作日志不存在，无法删除";
+        return false;
+    }
+
+    const nextLogs = publishedOperationLogs.value.filter((item) => item.id !== logId);
+    publishedOperationLogs.value = nextLogs;
+    persistPublishedOperationLogLibrary(nextLogs);
+
+    if (dialogOperationLogId.value === logId) {
+        dialogOperationLogId.value = "";
+    }
+
+    statusMessage.value = `已删除操作日志：${log.summary}`;
+    return true;
+}
+
+function clearCurrentProjectPublishedOperationLogs() {
+    if (!currentProjectPublishedOperationLibrary.value.length) {
+        statusMessage.value = "当前项目暂无操作日志";
+        return false;
+    }
+
+    const deletedCount = currentProjectPublishedOperationLibrary.value.length;
+    deletePublishedOperationLogsByProject(activeProjectRecordId.value);
+    statusMessage.value = `已清空 ${deletedCount} 条操作日志`;
+    return true;
+}
+
+function buildPublishedSnapshotLinkClipboardText(snapshots) {
+    const normalizedSnapshots = sortPublishedSnapshotCollection(
+        Array.isArray(snapshots) ? snapshots : [],
+        publishedSnapshotSortMode.value,
+    );
+
+    return [
+        `项目：${currentProjectName.value}`,
+        `生成时间：${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+        ...normalizedSnapshots.map((snapshot, index) => {
+            const link = buildPublishedRuntimeLink(snapshot.id, snapshot.pageId);
+            const environment = formatPublishedEnvironmentLabel(snapshot.environment);
+            return [
+                `${index + 1}. ${snapshot.name} · ${environment} · ${snapshot.pageName}`,
+                link,
+            ].join("\n");
+        }),
+    ].join("\n\n");
+}
+
+function focusPublishedSnapshotFromRollbackLog(logId) {
+    const log =
+        publishedRollbackLogs.value.find((item) => item.id === logId) ?? null;
+
+    if (!log) {
+        statusMessage.value = "回滚记录不存在，无法定位版本";
+        return false;
+    }
+
+    const snapshot =
+        currentProjectPublishedSnapshotLibrary.value.find(
+            (item) => item.id === log.snapshotId,
+        ) ?? null;
+
+    if (!snapshot) {
+        statusMessage.value = "该回滚记录关联的发布版本已不存在";
+        return false;
+    }
+
+    publishDiffSnapshotId.value = snapshot.id;
+    pendingRollbackSnapshotId.value = "";
+    statusMessage.value = `已定位到回滚记录对应版本：${snapshot.name}`;
+    return true;
+}
+
+function buildPublishedSnapshotExportPayload(options = {}) {
+    const snapshots = Array.isArray(options.snapshots)
+        ? sortPublishedSnapshotCollection(options.snapshots, publishedSnapshotSortMode.value)
+        : currentProjectPublishedSnapshots.value;
+    const snapshotIds = new Set(snapshots.map((item) => item.id));
+    const rollbackLogs = Array.isArray(options.rollbackLogs)
+        ? options.rollbackLogs
+        : currentProjectPublishedRollbackLibrary.value.filter((item) =>
+              snapshotIds.has(item.snapshotId),
+          );
+
+    return JSON.stringify(
+        {
+            schemaVersion: 1,
+            exportedAt: new Date().toISOString(),
+            exportScope:
+                typeof options.scope === "string" && options.scope.trim()
+                    ? options.scope.trim()
+                    : "current-project",
+            projectRecordId: activeProjectRecordId.value,
+            projectName: currentProjectName.value,
+            snapshotCount: snapshots.length,
+            rollbackLogCount: rollbackLogs.length,
+            snapshots,
+            rollbackLogs,
+        },
+        null,
+        2,
+    );
+}
+
+function buildPublishedOperationLogExportPayload(logs = currentProjectPublishedOperationLogs.value) {
+    const normalizedLogs = Array.isArray(logs) ? [...logs] : [];
+
+    return JSON.stringify(
+        {
+            schemaVersion: 1,
+            exportedAt: new Date().toISOString(),
+            exportScope: "published-operation-logs",
+            projectRecordId: activeProjectRecordId.value,
+            projectName: currentProjectName.value,
+            logCount: normalizedLogs.length,
+            logs: normalizedLogs,
+        },
+        null,
+        2,
+    );
+}
+
+function parseImportedPublishedSnapshotPayload(text) {
+    const parsed = JSON.parse(text);
+    const rawSnapshots = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.snapshots)
+          ? parsed.snapshots
+          : Array.isArray(parsed?.publishedSnapshots)
+            ? parsed.publishedSnapshots
+            : [];
+    const rawRollbackLogs = Array.isArray(parsed?.rollbackLogs)
+        ? parsed.rollbackLogs
+        : [];
+
+    if (!rawSnapshots.length) {
+        throw new Error("No published snapshots found");
+    }
+
+    return {
+        snapshots: rawSnapshots
+            .map((item, index) => normalizePublishedSnapshotRecord(item, index))
+            .filter(Boolean),
+        rollbackLogs: rawRollbackLogs
+            .map((item, index) => normalizePublishedRollbackLogRecord(item, index))
+            .filter(Boolean),
+    };
+}
+
+function openPublishedSnapshotExportDialog() {
+    dialogMode.value = "published-snapshot-export";
+    dialogText.value = buildPublishedSnapshotExportPayload();
+}
+
+function openSelectedPublishedSnapshotExportDialog() {
+    if (!selectedProjectPublishedSnapshots.value.length) {
+        statusMessage.value = "请先选择要导出的发布版本";
+        return false;
+    }
+
+    const selectedSnapshotIds = new Set(
+        selectedProjectPublishedSnapshots.value.map((item) => item.id),
+    );
+
+    dialogMode.value = "published-snapshot-export-selected";
+    dialogText.value = buildPublishedSnapshotExportPayload({
+        scope: "selected-snapshots",
+        snapshots: selectedProjectPublishedSnapshots.value,
+        rollbackLogs: currentProjectPublishedRollbackLibrary.value.filter((item) =>
+            selectedSnapshotIds.has(item.snapshotId),
+        ),
+    });
+    statusMessage.value = `已生成 ${selectedProjectPublishedSnapshots.value.length} 个所选版本导出包`;
+    return true;
+}
+
+function openPublishedOperationLogExportDialog() {
+    if (!currentProjectPublishedOperationLogs.value.length) {
+        statusMessage.value = "当前项目暂无可导出的操作日志";
+        return false;
+    }
+
+    dialogMode.value = "published-operation-export";
+    dialogText.value = buildPublishedOperationLogExportPayload();
+    statusMessage.value = `已生成 ${currentProjectPublishedOperationLogs.value.length} 条操作日志导出包`;
+    return true;
+}
+
+function openPublishedOperationLogDetail(logId) {
+    const log =
+        currentProjectPublishedOperationLogs.value.find((item) => item.id === logId) ??
+        null;
+
+    if (!log) {
+        statusMessage.value = "操作日志不存在，无法查看详情";
+        return false;
+    }
+
+    dialogOperationLogId.value = log.id;
+    dialogMode.value = "published-operation-detail";
+    return true;
+}
+
+function returnToPublishManagerDialog() {
+    dialogOperationLogId.value = "";
+    dialogMode.value = "project-publish";
+}
+
+async function copyActivePublishedOperationLogDetail() {
+    if (!activePublishedOperationLogDetailText.value) {
+        statusMessage.value = "当前没有可复制的操作日志";
+        return false;
+    }
+
+    return copyTextToClipboard(activePublishedOperationLogDetailText.value, {
+        successMessage: "操作日志 JSON 已复制到剪贴板",
+        failureMessage: "复制失败，请手动复制操作日志 JSON",
+    });
+}
+
+async function copySelectedPublishedSnapshotLinks() {
+    if (!selectedProjectPublishedSnapshots.value.length) {
+        statusMessage.value = "请先选择要复制链接的发布版本";
+        return false;
+    }
+
+    const copied = await copyTextToClipboard(
+        buildPublishedSnapshotLinkClipboardText(
+            selectedProjectPublishedSnapshots.value,
+        ),
+        {
+            successMessage: `已复制 ${selectedProjectPublishedSnapshots.value.length} 个发布链接`,
+            failureMessage: "批量复制发布链接失败，请稍后重试",
+            emptyMessage: "当前没有可复制的发布链接",
+        },
+    );
+
+    if (copied) {
+        appendPublishedOperationLog({
+            action: "batch-copy-links",
+            summary: `批量复制 ${selectedProjectPublishedSnapshots.value.length} 个发布链接`,
+            snapshotIds: selectedProjectPublishedSnapshots.value.map(
+                (item) => item.id,
+            ),
+            snapshotNames: selectedProjectPublishedSnapshots.value.map(
+                (item) => item.name,
+            ),
+        });
+        pushRuntimeDebugEvent({
+            level: "info",
+            category: "runtime",
+            title: "已批量复制发布地址",
+            detail: `${selectedProjectPublishedSnapshots.value.length} 个版本`,
+            force: true,
+        });
+    }
+
+    return copied;
+}
+
+async function openSelectedPublishedSnapshotRuntimes() {
+    if (!selectedProjectPublishedSnapshots.value.length) {
+        statusMessage.value = "请先选择要打开运行态的发布版本";
+        return false;
+    }
+
+    if (typeof window === "undefined") {
+        statusMessage.value = "当前环境不支持批量打开运行态";
+        return false;
+    }
+
+    const targetSnapshots = sortPublishedSnapshotCollection(
+        selectedProjectPublishedSnapshots.value,
+        publishedSnapshotSortMode.value,
+    );
+    let openedCount = 0;
+    let blockedCount = 0;
+    let copiedLinks = false;
+
+    targetSnapshots.forEach((snapshot) => {
+        const targetUrl = buildPublishedRuntimeLink(snapshot.id, snapshot.pageId);
+        const openedWindow = targetUrl
+            ? window.open(targetUrl, "_blank", "noopener,noreferrer")
+            : null;
+
+        if (openedWindow) {
+            openedCount += 1;
+        } else {
+            blockedCount += 1;
+        }
+    });
+
+    if (blockedCount > 0) {
+        copiedLinks = await copyTextToClipboard(
+            buildPublishedSnapshotLinkClipboardText(targetSnapshots),
+            {
+                successMessage: "批量链接已复制到剪贴板",
+                failureMessage: "浏览器拦截了批量打开，且复制链接失败，请稍后重试",
+                emptyMessage: "当前没有可复制的发布链接",
+            },
+        );
+    }
+
+    if (!openedCount && blockedCount) {
+        statusMessage.value = copiedLinks
+            ? `浏览器拦截了批量打开，已复制 ${targetSnapshots.length} 个发布链接`
+            : "浏览器拦截了批量打开，且复制链接失败，请稍后重试";
+        return false;
+    }
+
+    statusMessage.value = blockedCount
+        ? copiedLinks
+            ? `已打开 ${openedCount} 个运行态，另 ${blockedCount} 个链接已复制到剪贴板`
+            : `已打开 ${openedCount} 个运行态，另 ${blockedCount} 个被浏览器拦截`
+        : `已批量打开 ${openedCount} 个运行态`;
+    pushRuntimeDebugEvent({
+        level: "info",
+        category: "runtime",
+        title: "已批量打开发布运行态",
+        detail: blockedCount
+            ? copiedLinks
+                ? `${openedCount} 个已打开，${blockedCount} 个已复制链接`
+                : `${openedCount} 个已打开，${blockedCount} 个被拦截`
+            : `${openedCount} 个版本`,
+        force: true,
+    });
+    appendPublishedOperationLog({
+        action: "batch-open-runtimes",
+        summary: `批量打开 ${openedCount} 个发布运行态`,
+        detail: blockedCount
+            ? copiedLinks
+                ? `${blockedCount} 个链接已复制到剪贴板`
+                : `${blockedCount} 个被浏览器拦截`
+            : "",
+        snapshotIds: targetSnapshots.map((item) => item.id),
+        snapshotNames: targetSnapshots.map((item) => item.name),
+    });
+    return openedCount > 0;
+}
+
+function openPublishedSnapshotImportDialog() {
+    dialogMode.value = "published-snapshot-import";
+    dialogText.value = "";
+}
+
+function applyPublishedSnapshotImport() {
+    try {
+        const { snapshots, rollbackLogs } = parseImportedPublishedSnapshotPayload(
+            dialogText.value,
+        );
+        const usedSnapshotIds = new Set(
+            publishedSnapshots.value.map((item) => item.id),
+        );
+        const snapshotIdMap = new Map();
+        const importedSnapshots = snapshots.map((snapshot) => {
+            let nextId = snapshot.id;
+
+            if (usedSnapshotIds.has(snapshot.id)) {
+                nextId = createUniquePublishedSnapshotId(usedSnapshotIds);
+            } else {
+                usedSnapshotIds.add(snapshot.id);
+            }
+
+            snapshotIdMap.set(snapshot.id, nextId);
+
+            return {
+                ...snapshot,
+                id: nextId,
+                projectRecordId: activeProjectRecordId.value,
+                projectName: currentProjectName.value,
+                pinned: Boolean(snapshot.pinned),
+                pinnedAt: snapshot.pinned
+                    ? Number(snapshot.pinnedAt) || Number(snapshot.updatedAt) || Date.now()
+                    : 0,
+            };
+        });
+
+        publishedSnapshots.value = sortPublishedSnapshotCollection([
+            ...publishedSnapshots.value,
+            ...importedSnapshots,
+        ]);
+        persistPublishedSnapshotLibrary(publishedSnapshots.value);
+
+        if (rollbackLogs.length) {
+            const usedLogIds = new Set(publishedRollbackLogs.value.map((item) => item.id));
+            const importedRollbackLogs = rollbackLogs
+                .map((log) => {
+                    const mappedSnapshotId = snapshotIdMap.get(log.snapshotId);
+
+                    if (!mappedSnapshotId) {
+                        return null;
+                    }
+
+                    const linkedSnapshot =
+                        importedSnapshots.find((item) => item.id === mappedSnapshotId) ??
+                        null;
+                    let nextLogId = log.id;
+
+                    if (usedLogIds.has(log.id)) {
+                        nextLogId = createUniquePublishedRollbackLogId(usedLogIds);
+                    } else {
+                        usedLogIds.add(log.id);
+                    }
+
+                    return {
+                        ...log,
+                        id: nextLogId,
+                        projectRecordId: activeProjectRecordId.value,
+                        projectName: currentProjectName.value,
+                        snapshotId: mappedSnapshotId,
+                        snapshotName: linkedSnapshot?.name ?? log.snapshotName,
+                        environment:
+                            linkedSnapshot?.environment ?? log.environment,
+                        tags: linkedSnapshot?.tags ?? log.tags,
+                    };
+                })
+                .filter(Boolean);
+
+            publishedRollbackLogs.value = [
+                ...importedRollbackLogs,
+                ...publishedRollbackLogs.value,
+            ]
+                .sort((left, right) => right.rolledBackAt - left.rolledBackAt)
+                .slice(0, PUBLISHED_ROLLBACK_LOG_LIMIT);
+            persistPublishedRollbackLogLibrary(publishedRollbackLogs.value);
+        }
+
+        openPublishManagerDialog();
+        publishDiffSnapshotId.value = importedSnapshots[0]?.id ?? "";
+        appendPublishedOperationLog({
+            action: "import",
+            summary: `导入 ${importedSnapshots.length} 个发布版本`,
+            detail: rollbackLogs.length
+                ? `同时导入 ${rollbackLogs.length} 条回滚记录`
+                : "",
+            snapshotIds: importedSnapshots.map((item) => item.id),
+            snapshotNames: importedSnapshots.map((item) => item.name),
+        });
+        statusMessage.value = `已导入 ${importedSnapshots.length} 个发布版本`;
+    } catch (error) {
+        statusMessage.value = "发布版本导入失败，请检查 JSON 结构";
+        console.warn(error);
+    }
+}
+
+function resetPublishedSnapshotFilters() {
+    publishedSnapshotSearchKeyword.value = "";
+    publishedSnapshotFilterEnvironment.value = "all";
+    publishedSnapshotFilterApprovalStatus.value = "all";
+    publishedSnapshotFilterApprovalReviewer.value = "all";
+    publishedSnapshotFilterLockState.value = "all";
+    publishedSnapshotSortMode.value = PUBLISHED_SORT_OPTIONS[0].value;
+}
+
+function applyPublishedSnapshotApprovalStatusFilter(status = "all") {
+    publishedSnapshotFilterApprovalStatus.value =
+        status === "all" ? "all" : normalizePublishedApprovalStatus(status);
+}
+
+function applyPublishedSnapshotApprovalReviewerFilter(reviewer = "all") {
+    if (reviewer === "all") {
+        publishedSnapshotFilterApprovalReviewer.value = "all";
+        return;
+    }
+
+    if (reviewer === PUBLISHED_APPROVAL_REVIEWER_FILTER_UNASSIGNED) {
+        publishedSnapshotFilterApprovalReviewer.value =
+            PUBLISHED_APPROVAL_REVIEWER_FILTER_UNASSIGNED;
+        return;
+    }
+
+    publishedSnapshotFilterApprovalReviewer.value =
+        normalizePublishedApprovalReviewer(reviewer) || "all";
+}
+
+function handlePublishedSnapshotApprovalStatsCard(cardKey) {
+    if (cardKey === "all") {
+        applyPublishedSnapshotApprovalStatusFilter("all");
+        applyPublishedSnapshotApprovalReviewerFilter("all");
+        return;
+    }
+
+    if (cardKey === PUBLISHED_APPROVAL_REVIEWER_FILTER_UNASSIGNED) {
+        applyPublishedSnapshotApprovalReviewerFilter(
+            PUBLISHED_APPROVAL_REVIEWER_FILTER_UNASSIGNED,
+        );
+        return;
+    }
+
+    applyPublishedSnapshotApprovalStatusFilter(cardKey);
+}
+
+function resetPublishedSnapshotBatchOptions() {
+    publishedSnapshotBatchApplyNote.value = false;
+    publishedSnapshotBatchApplyTags.value = false;
+    publishedSnapshotBatchApplyEnvironment.value = false;
+    publishedSnapshotBatchApplyApprovalStatus.value = false;
+}
+
+function resetPublishedRollbackFilters() {
+    publishedRollbackSearchKeyword.value = "";
+    publishedRollbackFilterEnvironment.value = "all";
+    publishedRollbackFilterRelation.value = "all";
+}
+
+function resetPublishedOperationFilters() {
+    publishedOperationSearchKeyword.value = "";
+    publishedOperationFilterAction.value = "all";
+}
+
+function normalizeSelectedPublishedSnapshotIds(
+    snapshotIds,
+    snapshotCollection = currentProjectPublishedSnapshotLibrary.value,
+) {
+    const allowedIds = new Set(
+        (Array.isArray(snapshotCollection) ? snapshotCollection : []).map(
+            (item) => item.id,
+        ),
+    );
+
+    return Array.from(
+        new Set(
+            (Array.isArray(snapshotIds) ? snapshotIds : []).filter((id) =>
+                allowedIds.has(id),
+            ),
+        ),
+    );
+}
+
+function setSelectedPublishedSnapshotIds(
+    snapshotIds,
+    snapshotCollection = currentProjectPublishedSnapshotLibrary.value,
+) {
+    selectedPublishedSnapshotIds.value = normalizeSelectedPublishedSnapshotIds(
+        snapshotIds,
+        snapshotCollection,
+    );
+}
+
+function clearPublishedSnapshotSelection() {
+    selectedPublishedSnapshotIds.value = [];
+}
+
+function togglePublishedSnapshotSelection(snapshotId) {
+    const currentSelection = new Set(
+        normalizeSelectedPublishedSnapshotIds(selectedPublishedSnapshotIds.value),
+    );
+
+    if (currentSelection.has(snapshotId)) {
+        currentSelection.delete(snapshotId);
+    } else {
+        currentSelection.add(snapshotId);
+    }
+
+    setSelectedPublishedSnapshotIds(Array.from(currentSelection));
+}
+
+function toggleAllFilteredPublishedSnapshotsSelection() {
+    const filteredIds = filteredProjectPublishedSnapshots.value.map(
+        (item) => item.id,
+    );
+
+    if (!filteredIds.length) {
+        return false;
+    }
+
+    const currentSelection = new Set(
+        normalizeSelectedPublishedSnapshotIds(selectedPublishedSnapshotIds.value),
+    );
+
+    if (isAllFilteredPublishedSnapshotsSelected.value) {
+        filteredIds.forEach((id) => currentSelection.delete(id));
+    } else {
+        filteredIds.forEach((id) => currentSelection.add(id));
+    }
+
+    setSelectedPublishedSnapshotIds(Array.from(currentSelection));
+    return true;
+}
+
+function batchSetPublishedSnapshotPin(nextPinned) {
+    if (!selectedProjectPublishedSnapshots.value.length) {
+        statusMessage.value = `请先选择要${nextPinned ? "置顶" : "取消置顶"}的发布版本`;
+        return false;
+    }
+
+    const targetSnapshots = selectedProjectPublishedSnapshots.value.filter(
+        (item) => item.pinned !== nextPinned,
+    );
+
+    if (!targetSnapshots.length) {
+        statusMessage.value = nextPinned
+            ? "所选发布版本已全部置顶"
+            : "所选发布版本当前都未置顶";
+        return false;
+    }
+
+    const targetIds = new Set(targetSnapshots.map((item) => item.id));
+    const pinnedAt = Date.now();
+    const nextSnapshots = sortPublishedSnapshotCollection(
+        publishedSnapshots.value.map((item) =>
+            targetIds.has(item.id)
+                ? {
+                      ...item,
+                      pinned: nextPinned,
+                      pinnedAt: nextPinned ? pinnedAt : 0,
+                  }
+                : item,
+        ),
+    );
+
+    publishedSnapshots.value = nextSnapshots;
+    persistPublishedSnapshotLibrary(nextSnapshots);
+    publishDiffSnapshotId.value =
+        targetSnapshots[0]?.id ?? publishDiffSnapshotId.value;
+    appendPublishedOperationLog({
+        action: nextPinned ? "batch-pin" : "batch-unpin",
+        summary: nextPinned
+            ? `批量置顶 ${targetSnapshots.length} 个发布版本`
+            : `批量取消置顶 ${targetSnapshots.length} 个发布版本`,
+        snapshotIds: targetSnapshots.map((item) => item.id),
+        snapshotNames: targetSnapshots.map((item) => item.name),
+    });
+    statusMessage.value = nextPinned
+        ? `已批量置顶 ${targetSnapshots.length} 个发布版本`
+        : `已批量取消置顶 ${targetSnapshots.length} 个发布版本`;
+    return true;
+}
+
+function batchSetPublishedSnapshotLock(nextLocked) {
+    if (!selectedProjectPublishedSnapshots.value.length) {
+        statusMessage.value = `请先选择要${nextLocked ? "锁定" : "解锁"}的发布版本`;
+        return false;
+    }
+
+    const targetSnapshots = selectedProjectPublishedSnapshots.value.filter(
+        (item) => item.locked !== nextLocked,
+    );
+
+    if (!targetSnapshots.length) {
+        statusMessage.value = nextLocked
+            ? "所选发布版本已全部锁定"
+            : "所选发布版本当前都未锁定";
+        return false;
+    }
+
+    const targetIds = new Set(targetSnapshots.map((item) => item.id));
+    const nextSnapshots = sortPublishedSnapshotCollection(
+        publishedSnapshots.value.map((item) =>
+            targetIds.has(item.id)
+                ? {
+                      ...item,
+                      locked: nextLocked,
+                  }
+                : item,
+        ),
+    );
+
+    publishedSnapshots.value = nextSnapshots;
+    persistPublishedSnapshotLibrary(nextSnapshots);
+    publishDiffSnapshotId.value =
+        targetSnapshots[0]?.id ?? publishDiffSnapshotId.value;
+
+    if (nextLocked && targetIds.has(editingPublishedSnapshotId.value)) {
+        resetPublishDraft();
+        publishDiffSnapshotId.value =
+            targetSnapshots[0]?.id ?? publishDiffSnapshotId.value;
+    }
+
+    appendPublishedOperationLog({
+        action: nextLocked ? "batch-lock" : "batch-unlock",
+        summary: nextLocked
+            ? `批量锁定 ${targetSnapshots.length} 个发布版本`
+            : `批量解除锁定 ${targetSnapshots.length} 个发布版本`,
+        snapshotIds: targetSnapshots.map((item) => item.id),
+        snapshotNames: targetSnapshots.map((item) => item.name),
+    });
+    statusMessage.value = nextLocked
+        ? `已批量锁定 ${targetSnapshots.length} 个发布版本`
+        : `已批量解除锁定 ${targetSnapshots.length} 个发布版本`;
+    return true;
+}
+
+function batchDeletePublishedSnapshots() {
+    if (!selectedProjectPublishedSnapshots.value.length) {
+        statusMessage.value = "请先选择要删除的发布版本";
+        return false;
+    }
+
+    const deletableSnapshots = selectedProjectPublishedSnapshots.value.filter(
+        (item) => !item.locked,
+    );
+    const skippedLockedCount =
+        selectedProjectPublishedSnapshots.value.length - deletableSnapshots.length;
+
+    if (!deletableSnapshots.length) {
+        statusMessage.value = "所选发布版本已锁定，解锁后可删除";
+        return false;
+    }
+
+    const deletedIds = new Set(deletableSnapshots.map((item) => item.id));
+    const nextSnapshots = publishedSnapshots.value.filter(
+        (item) => !deletedIds.has(item.id),
+    );
+    const nextCurrentProjectSnapshots = sortPublishedSnapshotCollection(
+        nextSnapshots.filter(
+            (item) => item.projectRecordId === activeProjectRecordId.value,
+        ),
+    );
+
+    publishedSnapshots.value = nextSnapshots;
+    persistPublishedSnapshotLibrary(nextSnapshots);
+
+    if (deletedIds.has(editingPublishedSnapshotId.value)) {
+        resetPublishDraft();
+    }
+
+    if (deletedIds.has(publishDiffSnapshotId.value)) {
+        publishDiffSnapshotId.value = nextCurrentProjectSnapshots[0]?.id ?? "";
+    }
+
+    if (deletedIds.has(approvalTimelineSnapshotId.value)) {
+        approvalTimelineSnapshotId.value = "";
+    }
+
+    if (deletedIds.has(pendingRollbackSnapshotId.value)) {
+        pendingRollbackSnapshotId.value = "";
+    }
+
+    setSelectedPublishedSnapshotIds(
+        selectedPublishedSnapshotIds.value.filter((id) => !deletedIds.has(id)),
+        nextCurrentProjectSnapshots,
+    );
+    appendPublishedOperationLog({
+        action: "batch-delete",
+        summary: `批量删除 ${deletableSnapshots.length} 个发布版本`,
+        detail: skippedLockedCount
+            ? `跳过 ${skippedLockedCount} 个已锁定版本`
+            : "",
+        snapshotIds: deletableSnapshots.map((item) => item.id),
+        snapshotNames: deletableSnapshots.map((item) => item.name),
+    });
+    statusMessage.value = skippedLockedCount
+        ? `已删除 ${deletableSnapshots.length} 个发布版本，跳过 ${skippedLockedCount} 个已锁定版本`
+        : `已批量删除 ${deletableSnapshots.length} 个发布版本`;
+    return true;
+}
+
+function batchApplyPublishedSnapshotMeta() {
+    if (!selectedProjectPublishedSnapshots.value.length) {
+        statusMessage.value = "请先选择要批量编辑的发布版本";
+        return false;
+    }
+
+    if (
+        !publishedSnapshotBatchApplyNote.value &&
+        !publishedSnapshotBatchApplyTags.value &&
+        !publishedSnapshotBatchApplyEnvironment.value &&
+        !publishedSnapshotBatchApplyApprovalStatus.value
+    ) {
+        statusMessage.value = "请先勾选要批量应用的字段";
+        return false;
+    }
+
+    const editableSnapshots = selectedProjectPublishedSnapshots.value.filter(
+        (item) => !item.locked,
+    );
+    const skippedLockedCount =
+        selectedProjectPublishedSnapshots.value.length - editableSnapshots.length;
+
+    if (!editableSnapshots.length) {
+        statusMessage.value = "所选发布版本已锁定，解锁后可批量编辑";
+        return false;
+    }
+
+    const nextNote = publishedSnapshotBatchApplyNote.value
+        ? String(publishedSnapshotDraftNote.value || "").trim()
+        : null;
+    const nextTags = publishedSnapshotBatchApplyTags.value
+        ? normalizePublishedTagList(publishedSnapshotDraftTags.value)
+        : null;
+    const nextEnvironment = publishedSnapshotBatchApplyEnvironment.value
+        ? normalizePublishedEnvironment(publishedSnapshotDraftEnvironment.value)
+        : null;
+    const editableIds = new Set(editableSnapshots.map((item) => item.id));
+    let changedCount = 0;
+
+    const nextSnapshots = sortPublishedSnapshotCollection(
+        publishedSnapshots.value.map((item) => {
+            if (!editableIds.has(item.id)) {
+                return item;
+            }
+
+            const nextApprovalMeta = publishedSnapshotBatchApplyApprovalStatus.value
+                ? applyPublishedApprovalMeta(item, {
+                      approvalStatus: publishedSnapshotDraftApprovalStatus.value,
+                      approvalReviewer: publishedSnapshotDraftApprovalReviewer.value,
+                      approvalComment: publishedSnapshotDraftApprovalComment.value,
+                  })
+                : {
+                      approvalChanged: false,
+                      approvalStatus: item.approvalStatus,
+                      approvalReviewer: item.approvalReviewer,
+                      approvalComment: item.approvalComment,
+                      approvalUpdatedAt: item.approvalUpdatedAt,
+                      approvalHistory: item.approvalHistory,
+                  };
+            const updatedItem = {
+                ...item,
+                note: publishedSnapshotBatchApplyNote.value ? nextNote : item.note,
+                tags: publishedSnapshotBatchApplyTags.value ? nextTags : item.tags,
+                environment: publishedSnapshotBatchApplyEnvironment.value
+                    ? nextEnvironment
+                    : item.environment,
+                approvalStatus: nextApprovalMeta.approvalStatus,
+                approvalReviewer: nextApprovalMeta.approvalReviewer,
+                approvalComment: nextApprovalMeta.approvalComment,
+                approvalUpdatedAt: nextApprovalMeta.approvalUpdatedAt,
+                approvalHistory: nextApprovalMeta.approvalHistory,
+            };
+
+            if (
+                updatedItem.note !== item.note ||
+                updatedItem.environment !== item.environment ||
+                nextApprovalMeta.approvalChanged ||
+                JSON.stringify(updatedItem.tags ?? []) !==
+                    JSON.stringify(item.tags ?? [])
+            ) {
+                changedCount += 1;
+            }
+
+            return updatedItem;
+        }),
+    );
+
+    if (!changedCount) {
+        statusMessage.value = "所选发布版本的审批、环境、备注和标签没有变化";
+        return false;
+    }
+
+    publishedSnapshots.value = nextSnapshots;
+    persistPublishedSnapshotLibrary(nextSnapshots);
+    publishDiffSnapshotId.value = editableSnapshots[0]?.id ?? publishDiffSnapshotId.value;
+    pendingRollbackSnapshotId.value = "";
+    appendPublishedOperationLog({
+        action: "batch-update-meta",
+        summary: `批量更新 ${changedCount} 个发布版本信息`,
+        detail: [
+            publishedSnapshotBatchApplyApprovalStatus.value
+                ? buildPublishedApprovalSummary(
+                      publishedSnapshotDraftApprovalStatus.value,
+                      publishedSnapshotDraftApprovalReviewer.value,
+                      publishedSnapshotDraftApprovalComment.value,
+                  )
+                : "",
+            publishedSnapshotBatchApplyEnvironment.value
+                ? `环境：${formatPublishedEnvironmentLabel(nextEnvironment)}`
+                : "",
+            publishedSnapshotBatchApplyNote.value ? "备注已更新" : "",
+            publishedSnapshotBatchApplyTags.value ? "标签已更新" : "",
+        ]
+            .filter(Boolean)
+            .join(" · "),
+        snapshotIds: editableSnapshots.map((item) => item.id),
+        snapshotNames: editableSnapshots.map((item) => item.name),
+    });
+    statusMessage.value = skippedLockedCount
+        ? `已批量更新 ${changedCount} 个发布版本，跳过 ${skippedLockedCount} 个已锁定版本`
+        : `已批量更新 ${changedCount} 个发布版本的审批/环境/备注/标签`;
+    return true;
+}
+
+function batchSetPublishedSnapshotApprovalStatus(nextStatus) {
+    const targetStatus = normalizePublishedApprovalStatus(nextStatus);
+    const actionText = targetStatus === "approved" ? "通过" : "驳回";
+    const actionLabel = targetStatus === "approved" ? "审批通过" : "驳回";
+
+    if (!selectedProjectPublishedSnapshots.value.length) {
+        statusMessage.value = `请先选择要批量${actionText}的发布版本`;
+        return false;
+    }
+
+    const editableSnapshots = selectedProjectPublishedSnapshots.value.filter(
+        (item) => !item.locked,
+    );
+    const skippedLockedCount =
+        selectedProjectPublishedSnapshots.value.length - editableSnapshots.length;
+
+    if (!editableSnapshots.length) {
+        statusMessage.value = "所选发布版本已锁定，解锁后可批量审批";
+        return false;
+    }
+
+    const eligibleSnapshots = editableSnapshots.filter(
+        (item) =>
+            normalizePublishedApprovalStatus(item.approvalStatus) !== targetStatus,
+    );
+    const skippedSameStatusCount =
+        editableSnapshots.length - eligibleSnapshots.length;
+
+    if (!eligibleSnapshots.length) {
+        statusMessage.value =
+            targetStatus === "approved"
+                ? "所选未锁定发布版本已全部审批通过"
+                : "所选未锁定发布版本已全部驳回";
+        return false;
+    }
+
+    const reviewerInput = normalizePublishedApprovalReviewer(
+        publishedSnapshotDraftApprovalReviewer.value,
+    );
+    const commentInput = normalizePublishedApprovalComment(
+        publishedSnapshotDraftApprovalComment.value,
+    );
+    const explicitOverrides = {
+        preferEditingDraft: false,
+        ...(reviewerInput ? { approvalReviewer: reviewerInput } : {}),
+        ...(commentInput ? { approvalComment: commentInput } : {}),
+    };
+    const eligibleIds = new Set(eligibleSnapshots.map((item) => item.id));
+    const nextSnapshots = sortPublishedSnapshotCollection(
+        publishedSnapshots.value.map((item) => {
+            if (!eligibleIds.has(item.id)) {
+                return item;
+            }
+
+            const nextApprovalMeta = applyPublishedApprovalMeta(
+                item,
+                resolvePublishedSnapshotApprovalQuickPayload(
+                    item,
+                    targetStatus,
+                    explicitOverrides,
+                ),
+            );
+
+            return {
+                ...item,
+                approvalStatus: nextApprovalMeta.approvalStatus,
+                approvalReviewer: nextApprovalMeta.approvalReviewer,
+                approvalComment: nextApprovalMeta.approvalComment,
+                approvalUpdatedAt: nextApprovalMeta.approvalUpdatedAt,
+                approvalHistory: nextApprovalMeta.approvalHistory,
+            };
+        }),
+    );
+
+    publishedSnapshots.value = nextSnapshots;
+    persistPublishedSnapshotLibrary(nextSnapshots);
+    publishDiffSnapshotId.value =
+        eligibleSnapshots[0]?.id ?? publishDiffSnapshotId.value;
+    pendingRollbackSnapshotId.value = "";
+
+    if (eligibleIds.has(editingPublishedSnapshotId.value)) {
+        const activeSnapshot =
+            nextSnapshots.find(
+                (item) => item.id === editingPublishedSnapshotId.value,
+            ) ?? null;
+
+        if (activeSnapshot) {
+            publishedSnapshotDraftName.value = activeSnapshot.name;
+            publishedSnapshotDraftNote.value = activeSnapshot.note || "";
+            publishedSnapshotDraftEnvironment.value = normalizePublishedEnvironment(
+                activeSnapshot.environment,
+            );
+            publishedSnapshotDraftApprovalStatus.value =
+                normalizePublishedApprovalStatus(activeSnapshot.approvalStatus);
+            publishedSnapshotDraftApprovalReviewer.value =
+                normalizePublishedApprovalReviewer(
+                    activeSnapshot.approvalReviewer,
+                );
+            publishedSnapshotDraftApprovalComment.value =
+                normalizePublishedApprovalComment(activeSnapshot.approvalComment);
+            publishedSnapshotDraftTags.value = formatPublishedTagList(
+                activeSnapshot.tags,
+            );
+        }
+    }
+
+    appendPublishedOperationLog({
+        action: targetStatus === "approved" ? "batch-approve" : "batch-reject",
+        summary:
+            targetStatus === "approved"
+                ? `批量审批通过 ${eligibleSnapshots.length} 个发布版本`
+                : `批量驳回 ${eligibleSnapshots.length} 个发布版本`,
+        detail: [
+            buildPublishedApprovalSummary(
+                targetStatus,
+                reviewerInput,
+                commentInput,
+            ),
+            skippedSameStatusCount
+                ? `跳过 ${skippedSameStatusCount} 个已是${actionLabel}状态的版本`
+                : "",
+            skippedLockedCount
+                ? `跳过 ${skippedLockedCount} 个已锁定版本`
+                : "",
+        ]
+            .filter(Boolean)
+            .join(" · "),
+        snapshotIds: eligibleSnapshots.map((item) => item.id),
+        snapshotNames: eligibleSnapshots.map((item) => item.name),
+    });
+    statusMessage.value = [
+        `已批量${actionText} ${eligibleSnapshots.length} 个发布版本`,
+        skippedSameStatusCount
+            ? `跳过 ${skippedSameStatusCount} 个重复状态`
+            : "",
+        skippedLockedCount ? `跳过 ${skippedLockedCount} 个锁定版本` : "",
+    ]
+        .filter(Boolean)
+        .join("，");
+    return true;
+}
+
 function buildPublishedSnapshotDraftName() {
     const timestamp = new Intl.DateTimeFormat("zh-CN", {
         month: "2-digit",
@@ -3400,25 +8333,533 @@ function buildPublishedSnapshotDraftName() {
     return `${currentProjectName.value} ${timestamp}`;
 }
 
-function openPublishManagerDialog() {
+function resetPublishDraft(options = {}) {
     publishedSnapshotDraftName.value = buildPublishedSnapshotDraftName();
+    publishedSnapshotDraftNote.value = "";
+    publishedSnapshotDraftEnvironment.value =
+        latestProjectPublishedSnapshot.value?.environment ??
+        DEFAULT_PUBLISHED_ENVIRONMENT;
+    publishedSnapshotDraftApprovalStatus.value =
+        latestProjectPublishedSnapshot.value?.approvalStatus ??
+        DEFAULT_PUBLISHED_APPROVAL_STATUS;
+    publishedSnapshotDraftApprovalReviewer.value = "";
+    publishedSnapshotDraftApprovalComment.value = "";
+    publishedSnapshotDraftTags.value = "";
+    approvalTimelineSnapshotId.value = "";
+    pendingRollbackSnapshotId.value = "";
+
+    if (options.keepEditing !== true) {
+        editingPublishedSnapshotId.value = "";
+    }
+
+    if (options.clearDiff) {
+        publishDiffSnapshotId.value = "";
+    }
+}
+
+function openPublishManagerDialog() {
+    resetPublishDraft({ clearDiff: true });
+    resetPublishedSnapshotFilters();
+    resetPublishedSnapshotBatchOptions();
+    resetPublishedRollbackFilters();
+    resetPublishedOperationFilters();
+    clearPublishedSnapshotSelection();
+    publishDiffSnapshotId.value = latestProjectPublishedSnapshot.value?.id ?? "";
+    pendingRollbackSnapshotId.value = "";
     dialogMode.value = "project-publish";
+}
+
+function startPublishedSnapshotEdit(snapshotId) {
+    const snapshot =
+        publishedSnapshots.value.find((item) => item.id === snapshotId) ?? null;
+
+    if (!snapshot) {
+        statusMessage.value = "发布快照不存在，无法编辑";
+        return false;
+    }
+
+    if (snapshot.locked) {
+        statusMessage.value = "发布版本已锁定，解锁后可编辑";
+        return false;
+    }
+
+    editingPublishedSnapshotId.value = snapshot.id;
+    publishDiffSnapshotId.value = snapshot.id;
+    publishedSnapshotDraftName.value = snapshot.name;
+    publishedSnapshotDraftNote.value = snapshot.note || "";
+    publishedSnapshotDraftEnvironment.value = normalizePublishedEnvironment(
+        snapshot.environment,
+    );
+    publishedSnapshotDraftApprovalStatus.value =
+        normalizePublishedApprovalStatus(snapshot.approvalStatus);
+    publishedSnapshotDraftApprovalReviewer.value =
+        normalizePublishedApprovalReviewer(snapshot.approvalReviewer);
+    publishedSnapshotDraftApprovalComment.value =
+        normalizePublishedApprovalComment(snapshot.approvalComment);
+    publishedSnapshotDraftTags.value = formatPublishedTagList(snapshot.tags);
+    pendingRollbackSnapshotId.value = "";
+    statusMessage.value = `正在编辑发布信息：${snapshot.name}`;
+    return true;
+}
+
+function cancelPublishedSnapshotEdit() {
+    resetPublishDraft();
+    statusMessage.value = "已取消发布信息编辑";
 }
 
 function publishCurrentProjectSnapshot() {
     const snapshot = buildPublishedSnapshotRecord(project.value, {
         name: publishedSnapshotDraftName.value,
+        note: publishedSnapshotDraftNote.value,
+        environment: publishedSnapshotDraftEnvironment.value,
+        approvalStatus: publishedSnapshotDraftApprovalStatus.value,
+        approvalReviewer: publishedSnapshotDraftApprovalReviewer.value,
+        approvalComment: publishedSnapshotDraftApprovalComment.value,
+        tags: publishedSnapshotDraftTags.value,
         projectRecordId: activeProjectRecordId.value,
         projectName: currentProjectName.value,
         pageId: currentPageId.value,
     });
 
-    publishedSnapshots.value = [snapshot, ...publishedSnapshots.value].sort(
-        (left, right) => right.updatedAt - left.updatedAt,
+    publishedSnapshots.value = sortPublishedSnapshotCollection([
+        snapshot,
+        ...publishedSnapshots.value,
+    ]);
+    persistPublishedSnapshotLibrary(publishedSnapshots.value);
+    editingPublishedSnapshotId.value = "";
+    publishDiffSnapshotId.value = snapshot.id;
+    pendingRollbackSnapshotId.value = "";
+    publishedSnapshotDraftName.value = snapshot.name;
+    publishedSnapshotDraftNote.value = snapshot.note || "";
+    publishedSnapshotDraftEnvironment.value = snapshot.environment;
+    publishedSnapshotDraftApprovalStatus.value = snapshot.approvalStatus;
+    publishedSnapshotDraftApprovalReviewer.value = snapshot.approvalReviewer || "";
+    publishedSnapshotDraftApprovalComment.value = snapshot.approvalComment || "";
+    publishedSnapshotDraftTags.value = formatPublishedTagList(snapshot.tags);
+    appendPublishedOperationLog({
+        action: "publish",
+        summary: `生成发布快照：${snapshot.name}`,
+        detail: `${snapshot.pageName} · ${formatPublishedEnvironmentLabel(snapshot.environment)} · ${buildPublishedApprovalSummary(snapshot.approvalStatus, snapshot.approvalReviewer, snapshot.approvalComment)}`,
+        snapshotIds: [snapshot.id],
+        snapshotNames: [snapshot.name],
+    });
+    statusMessage.value = `已发布快照：${snapshot.name}`;
+}
+
+function updatePublishedSnapshotMeta(snapshotId, options = {}) {
+    const snapshot =
+        publishedSnapshots.value.find((item) => item.id === snapshotId) ?? null;
+
+    if (!snapshot) {
+        statusMessage.value = "发布快照不存在，无法更新";
+        return false;
+    }
+
+    if (snapshot.locked) {
+        statusMessage.value = "发布版本已锁定，解锁后可修改信息";
+        return false;
+    }
+
+    const nextName =
+        typeof options.name === "string" && options.name.trim()
+            ? options.name.trim()
+            : snapshot.name;
+    const nextNote =
+        typeof options.note === "string" ? options.note.trim() : snapshot.note;
+    const nextEnvironment = normalizePublishedEnvironment(
+        options.environment ?? snapshot.environment,
+    );
+    const nextTags = normalizePublishedTagList(options.tags ?? snapshot.tags);
+    const nextApprovalMeta = applyPublishedApprovalMeta(snapshot, {
+        approvalStatus: options.approvalStatus,
+        approvalReviewer: options.approvalReviewer,
+        approvalComment: options.approvalComment,
+    });
+    const operationAction =
+        typeof options.operationAction === "string" &&
+        options.operationAction.trim()
+            ? options.operationAction.trim()
+            : "update-meta";
+
+    if (
+        nextName === snapshot.name &&
+        nextNote === snapshot.note &&
+        nextEnvironment === snapshot.environment &&
+        !nextApprovalMeta.approvalChanged &&
+        JSON.stringify(nextTags) === JSON.stringify(snapshot.tags ?? [])
+    ) {
+        statusMessage.value = "发布信息没有变化";
+        return false;
+    }
+
+    publishedSnapshots.value = sortPublishedSnapshotCollection(
+        publishedSnapshots.value.map((item) =>
+            item.id === snapshotId
+                ? {
+                      ...item,
+                      name: nextName,
+                      note: nextNote,
+                      environment: nextEnvironment,
+                      approvalStatus: nextApprovalMeta.approvalStatus,
+                      approvalReviewer: nextApprovalMeta.approvalReviewer,
+                      approvalComment: nextApprovalMeta.approvalComment,
+                      approvalUpdatedAt: nextApprovalMeta.approvalUpdatedAt,
+                      approvalHistory: nextApprovalMeta.approvalHistory,
+                      tags: nextTags,
+                  }
+                : item,
+        ),
     );
     persistPublishedSnapshotLibrary(publishedSnapshots.value);
-    publishedSnapshotDraftName.value = snapshot.name;
-    statusMessage.value = `已发布快照：${snapshot.name}`;
+    publishedSnapshotDraftName.value = nextName;
+    publishedSnapshotDraftNote.value = nextNote;
+    publishedSnapshotDraftEnvironment.value = nextEnvironment;
+    publishedSnapshotDraftApprovalStatus.value = nextApprovalMeta.approvalStatus;
+    publishedSnapshotDraftApprovalReviewer.value =
+        nextApprovalMeta.approvalReviewer;
+    publishedSnapshotDraftApprovalComment.value =
+        nextApprovalMeta.approvalComment;
+    publishedSnapshotDraftTags.value = formatPublishedTagList(nextTags);
+    publishDiffSnapshotId.value = snapshotId;
+    pendingRollbackSnapshotId.value = "";
+    appendPublishedOperationLog({
+        action: operationAction,
+        summary:
+            typeof options.operationSummary === "string" &&
+            options.operationSummary.trim()
+                ? options.operationSummary.trim()
+                : `更新发布信息：${nextName}`,
+        detail: [
+            nextEnvironment !== snapshot.environment
+                ? `环境切换为 ${formatPublishedEnvironmentLabel(nextEnvironment)}`
+                : "",
+            nextApprovalMeta.approvalChanged
+                ? buildPublishedApprovalSummary(
+                      nextApprovalMeta.approvalStatus,
+                      nextApprovalMeta.approvalReviewer,
+                      nextApprovalMeta.approvalComment,
+                  )
+                : "",
+            nextNote !== snapshot.note ? "备注已更新" : "",
+            JSON.stringify(nextTags) !== JSON.stringify(snapshot.tags ?? [])
+                ? "标签已更新"
+                : "",
+        ]
+            .filter(Boolean)
+            .join(" · "),
+        snapshotIds: [snapshotId],
+        snapshotNames: [nextName],
+    });
+    statusMessage.value =
+        typeof options.statusMessage === "string" && options.statusMessage.trim()
+            ? options.statusMessage.trim()
+            : `已更新发布信息：${nextName}`;
+    return true;
+}
+
+function resolvePublishedSnapshotApprovalQuickPayload(
+    snapshot,
+    nextStatus,
+    options = {},
+) {
+    const targetStatus = normalizePublishedApprovalStatus(nextStatus);
+    const hasApprovalReviewer = Object.prototype.hasOwnProperty.call(
+        options,
+        "approvalReviewer",
+    );
+    const hasApprovalComment = Object.prototype.hasOwnProperty.call(
+        options,
+        "approvalComment",
+    );
+    const preferEditingDraft = options.preferEditingDraft !== false;
+    const isEditingTarget =
+        preferEditingDraft && editingPublishedSnapshotId.value === snapshot.id;
+
+    return {
+        approvalStatus: targetStatus,
+        approvalReviewer: hasApprovalReviewer
+            ? options.approvalReviewer
+            : isEditingTarget
+              ? publishedSnapshotDraftApprovalReviewer.value
+              : snapshot.approvalReviewer,
+        approvalComment: hasApprovalComment
+            ? options.approvalComment
+            : isEditingTarget
+              ? publishedSnapshotDraftApprovalComment.value
+              : normalizePublishedApprovalStatus(snapshot.approvalStatus) ===
+                  targetStatus
+                ? snapshot.approvalComment
+                : "",
+    };
+}
+
+function quickApprovePublishedSnapshot(snapshotId) {
+    const snapshot =
+        publishedSnapshots.value.find((item) => item.id === snapshotId) ?? null;
+
+    if (!snapshot) {
+        statusMessage.value = "发布快照不存在，无法审批通过";
+        return false;
+    }
+
+    return updatePublishedSnapshotMeta(snapshotId, {
+        ...resolvePublishedSnapshotApprovalQuickPayload(snapshot, "approved"),
+        operationAction: "approve",
+        operationSummary: `审批通过：${snapshot.name}`,
+        statusMessage: `已审批通过：${snapshot.name}`,
+    });
+}
+
+function quickRejectPublishedSnapshot(snapshotId) {
+    const snapshot =
+        publishedSnapshots.value.find((item) => item.id === snapshotId) ?? null;
+
+    if (!snapshot) {
+        statusMessage.value = "发布快照不存在，无法驳回";
+        return false;
+    }
+
+    return updatePublishedSnapshotMeta(snapshotId, {
+        ...resolvePublishedSnapshotApprovalQuickPayload(snapshot, "rejected"),
+        operationAction: "reject",
+        operationSummary: `审批驳回：${snapshot.name}`,
+        statusMessage: `已驳回发布版本：${snapshot.name}`,
+    });
+}
+
+function applyPublishedSnapshotDraft() {
+    if (editingPublishedSnapshotId.value) {
+        return updatePublishedSnapshotMeta(editingPublishedSnapshotId.value, {
+            name: publishedSnapshotDraftName.value,
+            note: publishedSnapshotDraftNote.value,
+            environment: publishedSnapshotDraftEnvironment.value,
+            approvalStatus: publishedSnapshotDraftApprovalStatus.value,
+            approvalReviewer: publishedSnapshotDraftApprovalReviewer.value,
+            approvalComment: publishedSnapshotDraftApprovalComment.value,
+            tags: publishedSnapshotDraftTags.value,
+        });
+    }
+
+    publishCurrentProjectSnapshot();
+    return true;
+}
+
+function overwritePublishedSnapshot(snapshotId, options = {}) {
+    const targetSnapshot =
+        publishedSnapshots.value.find((item) => item.id === snapshotId) ?? null;
+
+    if (!targetSnapshot) {
+        statusMessage.value = "发布快照不存在，无法覆盖";
+        return false;
+    }
+
+    if (targetSnapshot.locked) {
+        statusMessage.value = "发布版本已锁定，解锁后可覆盖";
+        return false;
+    }
+
+    const nextApprovalMeta = applyPublishedApprovalMeta(targetSnapshot, {
+        approvalStatus: options.approvalStatus,
+        approvalReviewer: options.approvalReviewer,
+        approvalComment: options.approvalComment,
+    });
+    const nextSnapshot = buildPublishedSnapshotRecord(project.value, {
+        name:
+            typeof options.name === "string"
+                ? options.name
+                : targetSnapshot.name,
+        note:
+            typeof options.note === "string"
+                ? options.note
+                : targetSnapshot.note,
+        environment:
+            options.environment ?? targetSnapshot.environment,
+        approvalStatus: nextApprovalMeta.approvalStatus,
+        approvalReviewer: nextApprovalMeta.approvalReviewer,
+        approvalComment: nextApprovalMeta.approvalComment,
+        tags: options.tags ?? targetSnapshot.tags,
+        projectRecordId: activeProjectRecordId.value,
+        projectName: currentProjectName.value,
+        pageId: currentPageId.value,
+    });
+
+    const mergedSnapshot = {
+        ...targetSnapshot,
+        ...nextSnapshot,
+        id: targetSnapshot.id,
+        createdAt: targetSnapshot.createdAt,
+        pinned: Boolean(targetSnapshot.pinned),
+        pinnedAt: Number(targetSnapshot.pinnedAt) || 0,
+        approvalUpdatedAt: nextApprovalMeta.approvalUpdatedAt,
+        approvalHistory: nextApprovalMeta.approvalHistory,
+    };
+
+    publishedSnapshots.value = sortPublishedSnapshotCollection(
+        publishedSnapshots.value.map((item) =>
+            item.id === snapshotId ? mergedSnapshot : item,
+        ),
+    );
+    persistPublishedSnapshotLibrary(publishedSnapshots.value);
+    publishDiffSnapshotId.value = snapshotId;
+    publishedSnapshotDraftName.value = mergedSnapshot.name;
+    publishedSnapshotDraftNote.value = mergedSnapshot.note || "";
+    publishedSnapshotDraftEnvironment.value = normalizePublishedEnvironment(
+        mergedSnapshot.environment,
+    );
+    publishedSnapshotDraftApprovalStatus.value =
+        normalizePublishedApprovalStatus(mergedSnapshot.approvalStatus);
+    publishedSnapshotDraftApprovalReviewer.value =
+        normalizePublishedApprovalReviewer(mergedSnapshot.approvalReviewer);
+    publishedSnapshotDraftApprovalComment.value =
+        normalizePublishedApprovalComment(mergedSnapshot.approvalComment);
+    publishedSnapshotDraftTags.value = formatPublishedTagList(mergedSnapshot.tags);
+    pendingRollbackSnapshotId.value = "";
+    appendPublishedOperationLog({
+        action: "overwrite",
+        summary: `覆盖发布快照：${mergedSnapshot.name}`,
+        detail: `${mergedSnapshot.pageName} · ${formatPublishedEnvironmentLabel(mergedSnapshot.environment)} · ${buildPublishedApprovalSummary(mergedSnapshot.approvalStatus, mergedSnapshot.approvalReviewer, mergedSnapshot.approvalComment)}`,
+        snapshotIds: [snapshotId],
+        snapshotNames: [mergedSnapshot.name],
+    });
+    statusMessage.value = `已覆盖发布快照：${mergedSnapshot.name}`;
+    return true;
+}
+
+function overwriteLatestPublishedSnapshot() {
+    if (!latestProjectPublishedSnapshot.value) {
+        statusMessage.value = "当前项目还没有可覆盖的发布快照";
+        return false;
+    }
+
+    return overwritePublishedSnapshot(latestProjectPublishedSnapshot.value.id);
+}
+
+function togglePublishedSnapshotDiff(snapshotId) {
+    publishDiffSnapshotId.value =
+        publishDiffSnapshotId.value === snapshotId ? "" : snapshotId;
+}
+
+function togglePublishedSnapshotApprovalTimeline(snapshotId) {
+    approvalTimelineSnapshotId.value =
+        approvalTimelineSnapshotId.value === snapshotId ? "" : snapshotId;
+}
+
+function togglePublishedSnapshotPin(snapshotId) {
+    const snapshot =
+        publishedSnapshots.value.find((item) => item.id === snapshotId) ?? null;
+
+    if (!snapshot) {
+        statusMessage.value = "发布快照不存在，无法切换置顶状态";
+        return false;
+    }
+
+    const nextPinned = !snapshot.pinned;
+    const nextSnapshots = sortPublishedSnapshotCollection(
+        publishedSnapshots.value.map((item) =>
+            item.id === snapshotId
+                ? {
+                      ...item,
+                      pinned: nextPinned,
+                      pinnedAt: nextPinned ? Date.now() : 0,
+                  }
+                : item,
+        ),
+    );
+
+    publishedSnapshots.value = nextSnapshots;
+    persistPublishedSnapshotLibrary(nextSnapshots);
+    publishDiffSnapshotId.value = snapshotId;
+    appendPublishedOperationLog({
+        action: nextPinned ? "pin" : "unpin",
+        summary: nextPinned
+            ? `置顶发布版本：${snapshot.name}`
+            : `取消置顶：${snapshot.name}`,
+        snapshotIds: [snapshotId],
+        snapshotNames: [snapshot.name],
+    });
+    statusMessage.value = nextPinned
+        ? `已置顶发布版本：${snapshot.name}`
+        : `已取消置顶：${snapshot.name}`;
+    return true;
+}
+
+function togglePublishedSnapshotLock(snapshotId) {
+    const snapshot =
+        publishedSnapshots.value.find((item) => item.id === snapshotId) ?? null;
+
+    if (!snapshot) {
+        statusMessage.value = "发布快照不存在，无法切换锁定状态";
+        return false;
+    }
+
+    const nextLocked = !snapshot.locked;
+    const nextSnapshots = sortPublishedSnapshotCollection(
+        publishedSnapshots.value.map((item) =>
+            item.id === snapshotId
+                ? {
+                      ...item,
+                      locked: nextLocked,
+                  }
+                : item,
+        ),
+    );
+
+    publishedSnapshots.value = nextSnapshots;
+    persistPublishedSnapshotLibrary(nextSnapshots);
+    publishDiffSnapshotId.value = snapshotId;
+
+    if (nextLocked && editingPublishedSnapshotId.value === snapshotId) {
+        resetPublishDraft();
+        publishDiffSnapshotId.value = snapshotId;
+    }
+
+    appendPublishedOperationLog({
+        action: nextLocked ? "lock" : "unlock",
+        summary: nextLocked
+            ? `锁定发布版本：${snapshot.name}`
+            : `解除锁定：${snapshot.name}`,
+        snapshotIds: [snapshotId],
+        snapshotNames: [snapshot.name],
+    });
+    statusMessage.value = nextLocked
+        ? `已锁定发布版本：${snapshot.name}`
+        : `已解除锁定：${snapshot.name}`;
+    return true;
+}
+
+function requestPublishedSnapshotRollback(snapshotId) {
+    const snapshot =
+        publishedSnapshots.value.find((item) => item.id === snapshotId) ?? null;
+
+    if (!snapshot) {
+        statusMessage.value = "发布快照不存在，无法准备回滚";
+        return false;
+    }
+
+    pendingRollbackSnapshotId.value = snapshotId;
+    publishDiffSnapshotId.value = snapshotId;
+    statusMessage.value = `请确认是否回滚到发布版本：${snapshot.name}`;
+    return true;
+}
+
+function cancelPublishedSnapshotRollback() {
+    pendingRollbackSnapshotId.value = "";
+    statusMessage.value = "已取消本次回滚确认";
+}
+
+function confirmPublishedSnapshotRollback(snapshotId = pendingRollbackSnapshotId.value) {
+    if (!snapshotId) {
+        statusMessage.value = "当前没有待确认的回滚版本";
+        return false;
+    }
+
+    const restored = restorePublishedSnapshotToEditor(snapshotId);
+
+    if (restored) {
+        pendingRollbackSnapshotId.value = "";
+    }
+
+    return restored;
 }
 
 async function copyPublishedSnapshotLink(snapshotId, options = {}) {
@@ -3444,6 +8885,15 @@ async function copyPublishedSnapshotLink(snapshotId, options = {}) {
     );
 
     if (copied) {
+        appendPublishedOperationLog({
+            action: "copy-link",
+            projectRecordId: snapshot.projectRecordId,
+            projectName: snapshot.projectName,
+            summary: `复制发布链接：${snapshot.name}`,
+            detail: `${snapshot.pageName} · ${formatPublishedEnvironmentLabel(snapshot.environment)}`,
+            snapshotIds: [snapshot.id],
+            snapshotNames: [snapshot.name],
+        });
         pushRuntimeDebugEvent({
             level: "info",
             category: "runtime",
@@ -3464,10 +8914,53 @@ function deletePublishedSnapshot(snapshotId) {
         return;
     }
 
-    publishedSnapshots.value = publishedSnapshots.value.filter(
+    if (snapshot.locked) {
+        statusMessage.value = "发布版本已锁定，解锁后可删除";
+        return;
+    }
+
+    const nextSnapshots = publishedSnapshots.value.filter(
         (item) => item.id !== snapshotId,
     );
-    persistPublishedSnapshotLibrary(publishedSnapshots.value);
+    const nextCurrentProjectSnapshots = sortPublishedSnapshotCollection(
+        nextSnapshots.filter(
+            (item) => item.projectRecordId === activeProjectRecordId.value,
+        ),
+    );
+
+    publishedSnapshots.value = nextSnapshots;
+    persistPublishedSnapshotLibrary(nextSnapshots);
+
+    if (editingPublishedSnapshotId.value === snapshotId) {
+        resetPublishDraft();
+    }
+
+    if (publishDiffSnapshotId.value === snapshotId) {
+        publishDiffSnapshotId.value = nextCurrentProjectSnapshots[0]?.id ?? "";
+    }
+
+    if (approvalTimelineSnapshotId.value === snapshotId) {
+        approvalTimelineSnapshotId.value = "";
+    }
+
+    if (pendingRollbackSnapshotId.value === snapshotId) {
+        pendingRollbackSnapshotId.value = "";
+    }
+
+    setSelectedPublishedSnapshotIds(
+        selectedPublishedSnapshotIds.value.filter((id) => id !== snapshotId),
+        nextCurrentProjectSnapshots,
+    );
+
+    appendPublishedOperationLog({
+        action: "delete",
+        projectRecordId: snapshot.projectRecordId,
+        projectName: snapshot.projectName,
+        summary: `删除发布快照：${snapshot.name}`,
+        detail: `${snapshot.pageName} · ${formatPublishedEnvironmentLabel(snapshot.environment)}`,
+        snapshotIds: [snapshot.id],
+        snapshotNames: [snapshot.name],
+    });
     statusMessage.value = `已删除发布快照：${snapshot.name}`;
 }
 
@@ -3486,6 +8979,87 @@ function deletePublishedSnapshotsByProject(projectRecordId) {
 
     publishedSnapshots.value = nextSnapshots;
     persistPublishedSnapshotLibrary(publishedSnapshots.value);
+
+    if (
+        !nextSnapshots.some((item) => item.id === editingPublishedSnapshotId.value)
+    ) {
+        editingPublishedSnapshotId.value = "";
+    }
+
+    if (!nextSnapshots.some((item) => item.id === publishDiffSnapshotId.value)) {
+        publishDiffSnapshotId.value = "";
+    }
+
+    if (!nextSnapshots.some((item) => item.id === approvalTimelineSnapshotId.value)) {
+        approvalTimelineSnapshotId.value = "";
+    }
+
+    if (!nextSnapshots.some((item) => item.id === pendingRollbackSnapshotId.value)) {
+        pendingRollbackSnapshotId.value = "";
+    }
+
+    if (projectRecordId === activeProjectRecordId.value) {
+        clearPublishedSnapshotSelection();
+    }
+}
+
+function restorePublishedSnapshotToEditor(snapshotId) {
+    const snapshot =
+        publishedSnapshots.value.find((item) => item.id === snapshotId) ?? null;
+
+    if (!snapshot) {
+        statusMessage.value = "发布快照不存在，无法回滚";
+        return false;
+    }
+
+    const previousSnapshot = createProjectSnapshot();
+    const previousLabel = currentHistoryLabel.value;
+    const rollbackSummary =
+        buildPublishedSnapshotDiffSummary(snapshot, project.value).summary;
+    const restoredProject = hydrateProjectSourceSecrets(
+        JSON.parse(snapshot.snapshot),
+        activeProjectRecordId.value || snapshot.projectRecordId,
+    );
+
+    if (snapshot.pageId && restoredProject.pages.some((page) => page.id === snapshot.pageId)) {
+        restoredProject.activePageId = snapshot.pageId;
+    }
+
+    applyProjectState(restoredProject, {
+        closeDialog: false,
+        statusMessage: `已回滚到发布版本：${snapshot.name}`,
+    });
+    persistEditorProjectState(restoredProject);
+    pushUndoEntry(createHistoryEntry(previousSnapshot, previousLabel));
+    currentHistoryLabel.value = `回滚至 ${snapshot.name}`;
+    lastHistoryCommitAt.value = Date.now();
+    lastHistoryCommitLabel.value = currentHistoryLabel.value;
+    publishedSnapshotDraftName.value = snapshot.name;
+    publishedSnapshotDraftNote.value = snapshot.note || "";
+    publishedSnapshotDraftEnvironment.value = normalizePublishedEnvironment(
+        snapshot.environment,
+    );
+    publishedSnapshotDraftApprovalStatus.value =
+        normalizePublishedApprovalStatus(snapshot.approvalStatus);
+    publishedSnapshotDraftApprovalReviewer.value =
+        normalizePublishedApprovalReviewer(snapshot.approvalReviewer);
+    publishedSnapshotDraftApprovalComment.value =
+        normalizePublishedApprovalComment(snapshot.approvalComment);
+    publishedSnapshotDraftTags.value = formatPublishedTagList(snapshot.tags);
+    editingPublishedSnapshotId.value = snapshot.id;
+    publishDiffSnapshotId.value = snapshot.id;
+    pendingRollbackSnapshotId.value = "";
+    appendPublishedRollbackLog(snapshot, rollbackSummary);
+    appendPublishedOperationLog({
+        action: "rollback",
+        projectRecordId: snapshot.projectRecordId,
+        projectName: snapshot.projectName,
+        summary: `回滚到发布版本：${snapshot.name}`,
+        detail: rollbackSummary,
+        snapshotIds: [snapshot.id],
+        snapshotNames: [snapshot.name],
+    });
+    return true;
 }
 
 function activatePublishedRuntime(snapshotId, options = {}) {
@@ -3520,6 +9094,15 @@ function activatePublishedRuntime(snapshotId, options = {}) {
     resetRuntimeFilters();
     clearLinkedWidgetState();
     appMode.value = "runtime";
+    appendPublishedOperationLog({
+        action: "open-runtime",
+        projectRecordId: resolved.snapshot.projectRecordId,
+        projectName: resolved.snapshot.projectName,
+        summary: `打开发布运行态：${resolved.snapshot.name}`,
+        detail: `${resolved.snapshot.pageName} · ${formatPublishedEnvironmentLabel(resolved.snapshot.environment)}`,
+        snapshotIds: [resolved.snapshot.id],
+        snapshotNames: [resolved.snapshot.name],
+    });
     syncSourceRefreshTimers();
     statusMessage.value = `已打开发布快照：${resolved.snapshot.name}`;
     pushRuntimeDebugEvent({
@@ -4951,10 +10534,12 @@ function duplicateProjectRecord(recordId) {
     statusMessage.value = `已复制项目：${duplicated.name}`;
 }
 
-function createProjectFromImport() {
+async function createProjectFromImport() {
     try {
-        const nextProject = normalizeProjectSchema(
-            JSON.parse(dialogText.value),
+        const importedPayload = parseImportedProjectPayload(dialogText.value);
+        const nextProject = importedPayload.project;
+        const importedAssetCount = await importProjectEmbeddedAssets(
+            importedPayload.assets,
         );
         const record = buildProjectRecord(nextProject, {
             name:
@@ -4965,10 +10550,12 @@ function createProjectFromImport() {
         activeProjectRecordId.value = record.id;
         persistProjectLibraryState(projectLibrary.value, record.id);
         applyProjectState(nextProject, {
-            statusMessage: `已导入项目：${record.name}`,
+            statusMessage: importedAssetCount
+                ? `已导入项目：${record.name}，并同步 ${importedAssetCount} 个本地资源`
+                : `已导入项目：${record.name}`,
         });
     } catch (error) {
-        statusMessage.value = "导入失败，请检查项目 JSON 结构";
+        statusMessage.value = "导入失败，请检查项目包或项目 JSON 结构";
         console.warn(error);
     }
 }
@@ -5039,6 +10626,8 @@ function deleteProjectRecord(recordId) {
 
     removeProjectSourceSecrets(record.id);
     deletePublishedSnapshotsByProject(record.id);
+    deletePublishedRollbackLogsByProject(record.id);
+    deletePublishedOperationLogsByProject(record.id);
 
     if (!remaining.length) {
         const fallbackRecord = buildProjectRecord(createBlankProjectState(), {
@@ -5097,10 +10686,24 @@ function resetProject() {
     statusMessage.value = "已恢复示例项目";
 }
 
-function openExportDialog() {
+async function openExportDialog() {
     dialogSourceId.value = "";
     dialogMode.value = "export";
-    dialogText.value = buildProjectExportPayload(project.value);
+    dialogText.value = "";
+    statusMessage.value = "正在生成项目导出包";
+
+    try {
+        dialogText.value = await buildProjectExportPayload(project.value);
+        const referencedAssets = collectReferencedAssetsFromProject(project.value);
+
+        statusMessage.value = referencedAssets.length
+            ? `已生成项目导出包，包含 ${referencedAssets.length} 个本地资源`
+            : "已生成项目导出包";
+    } catch (error) {
+        dialogMode.value = null;
+        statusMessage.value = "项目导出包生成失败，请稍后重试";
+        console.warn(error);
+    }
 }
 
 function openImportDialog() {
@@ -5126,16 +10729,83 @@ function getJsonDialogActionLabel() {
 }
 
 async function copyExport() {
-    await copyTextToClipboard(dialogText.value, {
-        successMessage: "JSON 已复制到剪贴板",
-        failureMessage: "复制失败，请手动复制 JSON",
+    const isProjectExport = dialogMode.value === "export";
+
+    return copyTextToClipboard(dialogText.value, {
+        successMessage: isProjectExport
+            ? "项目包已复制到剪贴板"
+            : "JSON 已复制到剪贴板",
+        failureMessage: isProjectExport
+            ? "复制失败，请手动复制项目包"
+            : "复制失败，请手动复制 JSON",
     });
 }
 
-function applyImport() {
+function appendPublishedSnapshotExportOperationLog(mode = dialogMode.value) {
+    if (mode === "published-snapshot-export") {
+        appendPublishedOperationLog({
+            action: "export-current",
+            summary: `导出当前项目 ${currentProjectPublishedSnapshotLibrary.value.length} 个发布版本`,
+            detail: currentProjectPublishedRollbackLibrary.value.length
+                ? `包含 ${currentProjectPublishedRollbackLibrary.value.length} 条回滚记录`
+                : "未包含回滚记录",
+            snapshotIds: currentProjectPublishedSnapshotLibrary.value.map(
+                (item) => item.id,
+            ),
+            snapshotNames: currentProjectPublishedSnapshotLibrary.value.map(
+                (item) => item.name,
+            ),
+        });
+        return true;
+    }
+
+    if (mode === "published-snapshot-export-selected") {
+        const selectedSnapshotIds = new Set(
+            selectedProjectPublishedSnapshots.value.map((item) => item.id),
+        );
+        const relatedRollbackCount = currentProjectPublishedRollbackLibrary.value.filter(
+            (item) => selectedSnapshotIds.has(item.snapshotId),
+        ).length;
+
+        appendPublishedOperationLog({
+            action: "export-selected",
+            summary: `导出所选 ${selectedProjectPublishedSnapshots.value.length} 个发布版本`,
+            detail: relatedRollbackCount
+                ? `包含 ${relatedRollbackCount} 条关联回滚记录`
+                : "未包含关联回滚记录",
+            snapshotIds: selectedProjectPublishedSnapshots.value.map(
+                (item) => item.id,
+            ),
+            snapshotNames: selectedProjectPublishedSnapshots.value.map(
+                (item) => item.name,
+            ),
+        });
+        return true;
+    }
+
+    return false;
+}
+
+function appendPublishedOperationLogExportRecord() {
+    appendPublishedOperationLog({
+        action: "export-operation-logs",
+        summary: `导出当前项目 ${currentProjectPublishedOperationLogs.value.length} 条操作日志`,
+        detail: currentProjectPublishedSnapshots.value.length
+            ? `关联 ${currentProjectPublishedSnapshots.value.length} 个发布版本`
+            : "当前项目暂无发布版本",
+        snapshotIds: currentProjectPublishedSnapshots.value.map((item) => item.id),
+        snapshotNames: currentProjectPublishedSnapshots.value.map(
+            (item) => item.name,
+        ),
+    });
+}
+
+async function applyImport() {
     try {
-        const nextProject = normalizeProjectSchema(
-            JSON.parse(dialogText.value),
+        const importedPayload = parseImportedProjectPayload(dialogText.value);
+        const nextProject = importedPayload.project;
+        const importedAssetCount = await importProjectEmbeddedAssets(
+            importedPayload.assets,
         );
         rememberProjectSourceSecrets(activeProjectRecordId.value, nextProject);
         queueHistoryLabel("导入项目");
@@ -5153,9 +10823,11 @@ function applyImport() {
         resetRuntimeVariables();
         clearLinkedWidgetState();
         selectDefaultWidget(currentPage.value);
-        statusMessage.value = "项目 JSON 已导入";
+        statusMessage.value = importedAssetCount
+            ? `项目包已导入，并同步 ${importedAssetCount} 个本地资源`
+            : "项目 JSON 已导入";
     } catch (error) {
-        statusMessage.value = "导入失败，请检查 JSON 结构";
+        statusMessage.value = "导入失败，请检查项目包或 JSON 结构";
         console.warn(error);
     }
 }
@@ -5170,6 +10842,22 @@ function getJsonDialogEyebrowLabel() {
         dialogMode.value === "source-create-import"
     ) {
         return "数据源导入";
+    }
+
+    if (dialogMode.value === "published-snapshot-export") {
+        return "发布版本导出";
+    }
+
+    if (dialogMode.value === "published-snapshot-export-selected") {
+        return "所选版本导出";
+    }
+
+    if (dialogMode.value === "published-operation-export") {
+        return "操作日志导出";
+    }
+
+    if (dialogMode.value === "published-snapshot-import") {
+        return "发布版本导入";
     }
 
     return dialogMode.value === "export" ? "项目导出" : "项目导入";
@@ -5190,14 +10878,34 @@ function getJsonDialogTitleLabel() {
         return "粘贴配置 JSON 并新建数据源";
     }
 
+    if (dialogMode.value === "published-snapshot-export") {
+        return "复制当前项目的发布版本包";
+    }
+
+    if (dialogMode.value === "published-snapshot-export-selected") {
+        return "复制所选发布版本包";
+    }
+
+    if (dialogMode.value === "published-operation-export") {
+        return "复制当前项目的操作日志包";
+    }
+
+    if (dialogMode.value === "published-snapshot-import") {
+        return "粘贴发布版本包并导入当前项目";
+    }
+
     return dialogMode.value === "export"
-        ? "复制当前项目 JSON"
-        : "粘贴项目 JSON 并导入";
+        ? "复制当前项目包（含本地资源）"
+        : "粘贴项目包或项目 JSON 并导入";
 }
 
 function isJsonDialogReadonlyState() {
     return (
-        dialogMode.value === "export" || dialogMode.value === "source-export"
+        dialogMode.value === "export" ||
+        dialogMode.value === "source-export" ||
+        dialogMode.value === "published-snapshot-export" ||
+        dialogMode.value === "published-snapshot-export-selected" ||
+        dialogMode.value === "published-operation-export"
     );
 }
 
@@ -5214,16 +10922,48 @@ function getJsonDialogActionLabelText() {
         return "确认新建数据源";
     }
 
-    return dialogMode.value === "export" ? "复制 JSON" : "确认导入";
+    if (dialogMode.value === "published-snapshot-export") {
+        return "复制版本包";
+    }
+
+    if (dialogMode.value === "published-snapshot-export-selected") {
+        return "复制所选版本包";
+    }
+
+    if (dialogMode.value === "published-operation-export") {
+        return "复制日志包";
+    }
+
+    if (dialogMode.value === "published-snapshot-import") {
+        return "确认导入版本";
+    }
+
+    return dialogMode.value === "export" ? "复制项目包" : "确认导入项目";
 }
 
 function getJsonDialogHintText() {
+    if (dialogMode.value === "export") {
+        return "导出内容包含当前项目 JSON，以及项目中引用到的本地图片/视频资源。";
+    }
+
+    if (dialogMode.value === "import") {
+        return "支持新版项目包（含本地资源），也兼容旧版纯项目 JSON。";
+    }
+
     if (dialogMode.value === "source-create-import") {
         return "支持单个配置对象、配置数组，或包含 dataSources 字段的 JSON 结构。";
     }
 
     if (dialogMode.value === "source-import") {
         return "覆盖当前数据源时仅支持单个配置对象。";
+    }
+
+    if (dialogMode.value === "published-snapshot-import") {
+        return "支持直接粘贴版本数组，或包含 snapshots / rollbackLogs 字段的版本包 JSON。";
+    }
+
+    if (dialogMode.value === "published-operation-export") {
+        return "当前导出仅包含当前项目的发布操作日志。";
     }
 
     return "";
@@ -5250,12 +10990,46 @@ async function handleJsonDialogAction() {
         return;
     }
 
+    if (dialogMode.value === "published-snapshot-export") {
+        const copied = await copyExport();
+
+        if (copied) {
+            appendPublishedSnapshotExportOperationLog("published-snapshot-export");
+        }
+        return;
+    }
+
+    if (dialogMode.value === "published-snapshot-export-selected") {
+        const copied = await copyExport();
+
+        if (copied) {
+            appendPublishedSnapshotExportOperationLog(
+                "published-snapshot-export-selected",
+            );
+        }
+        return;
+    }
+
+    if (dialogMode.value === "published-operation-export") {
+        const copied = await copyExport();
+
+        if (copied) {
+            appendPublishedOperationLogExportRecord();
+        }
+        return;
+    }
+
+    if (dialogMode.value === "published-snapshot-import") {
+        applyPublishedSnapshotImport();
+        return;
+    }
+
     if (dialogMode.value === "export") {
         await copyExport();
         return;
     }
 
-    applyImport();
+    await applyImport();
 }
 
 function getActiveJsonDialogEyebrow() {
@@ -5265,6 +11039,18 @@ function getActiveJsonDialogEyebrow() {
 
     if (dialogMode.value === "source-import") {
         return "数据源导入";
+    }
+
+    if (dialogMode.value === "published-snapshot-export") {
+        return "发布版本导出";
+    }
+
+    if (dialogMode.value === "published-snapshot-export-selected") {
+        return "所选版本导出";
+    }
+
+    if (dialogMode.value === "published-snapshot-import") {
+        return "发布版本导入";
     }
 
     return dialogMode.value === "export" ? "项目导出" : "项目导入";
@@ -5281,6 +11067,18 @@ function getActiveJsonDialogTitle() {
         return `粘贴配置 JSON 并覆盖 ${sourceName}`;
     }
 
+    if (dialogMode.value === "published-snapshot-export") {
+        return "复制当前项目的发布版本包";
+    }
+
+    if (dialogMode.value === "published-snapshot-export-selected") {
+        return "复制所选发布版本包";
+    }
+
+    if (dialogMode.value === "published-snapshot-import") {
+        return "粘贴发布版本包并导入当前项目";
+    }
+
     return dialogMode.value === "export"
         ? "复制当前项目 JSON"
         : "粘贴项目 JSON 并导入";
@@ -5288,7 +11086,10 @@ function getActiveJsonDialogTitle() {
 
 function isActiveJsonDialogReadonly() {
     return (
-        dialogMode.value === "export" || dialogMode.value === "source-export"
+        dialogMode.value === "export" ||
+        dialogMode.value === "source-export" ||
+        dialogMode.value === "published-snapshot-export" ||
+        dialogMode.value === "published-snapshot-export-selected"
     );
 }
 
@@ -5299,6 +11100,18 @@ function getActiveJsonDialogActionLabel() {
 
     if (dialogMode.value === "source-import") {
         return "确认导入配置";
+    }
+
+    if (dialogMode.value === "published-snapshot-export") {
+        return "复制版本包";
+    }
+
+    if (dialogMode.value === "published-snapshot-export-selected") {
+        return "复制所选版本包";
+    }
+
+    if (dialogMode.value === "published-snapshot-import") {
+        return "确认导入版本";
     }
 
     return dialogMode.value === "export" ? "复制 JSON" : "确认导入";
@@ -5320,12 +11133,37 @@ async function handleActiveJsonDialogAction() {
         return;
     }
 
+    if (dialogMode.value === "published-snapshot-export") {
+        const copied = await copyExport();
+
+        if (copied) {
+            appendPublishedSnapshotExportOperationLog("published-snapshot-export");
+        }
+        return;
+    }
+
+    if (dialogMode.value === "published-snapshot-export-selected") {
+        const copied = await copyExport();
+
+        if (copied) {
+            appendPublishedSnapshotExportOperationLog(
+                "published-snapshot-export-selected",
+            );
+        }
+        return;
+    }
+
+    if (dialogMode.value === "published-snapshot-import") {
+        applyPublishedSnapshotImport();
+        return;
+    }
+
     if (dialogMode.value === "export") {
         await copyExport();
         return;
     }
 
-    applyImport();
+    await applyImport();
 }
 
 function closeDialog() {
@@ -5334,7 +11172,31 @@ function closeDialog() {
     templateDraftName.value = "";
     projectDraftName.value = "";
     publishedSnapshotDraftName.value = "";
+    publishedSnapshotDraftNote.value = "";
+    publishedSnapshotDraftEnvironment.value = DEFAULT_PUBLISHED_ENVIRONMENT;
+    publishedSnapshotDraftApprovalStatus.value =
+        DEFAULT_PUBLISHED_APPROVAL_STATUS;
+    publishedSnapshotDraftApprovalReviewer.value = "";
+    publishedSnapshotDraftApprovalComment.value = "";
+    publishedSnapshotDraftTags.value = "";
+    resetExpandedAssetUsageIds();
+    clearAssetSelection();
+    resetAssetBatchTagDraft();
+    resetAssetLibraryViewState();
+    cancelAssetRename();
+    cancelAssetTagEdit();
+    resetAssetLibraryFilters();
+    resetPublishedSnapshotFilters();
+    resetPublishedSnapshotBatchOptions();
+    resetPublishedRollbackFilters();
+    resetPublishedOperationFilters();
+    editingPublishedSnapshotId.value = "";
+    publishDiffSnapshotId.value = "";
+    approvalTimelineSnapshotId.value = "";
+    pendingRollbackSnapshotId.value = "";
+    clearPublishedSnapshotSelection();
     dialogSourceId.value = "";
+    dialogOperationLogId.value = "";
 }
 
 function createProjectSnapshot() {
@@ -6286,6 +12148,8 @@ watch(previewMode, (enabled) => {
 });
 
 onMounted(() => {
+    void loadAssetLibrary({ silent: true });
+
     if (
         initialRoute.mode === "runtime" &&
         initialRoute.publishId &&
@@ -6318,6 +12182,7 @@ onBeforeUnmount(() => {
     window.removeEventListener("keydown", handleKeydown);
     clearSourceRefreshTimers();
     clearLinkedWidgetState();
+    revokeAllAssetPreviewUrls();
 });
 </script>
 
@@ -6343,6 +12208,7 @@ onBeforeUnmount(() => {
             @toggle-preview="togglePreviewMode"
             @open-runtime="openRuntimeWorkspace"
             @copy-runtime-link="copyRuntimeLink"
+            @open-asset-library="openAssetLibraryDialog"
             @open-publish-manager="openPublishManagerDialog"
             @open-project-manager="openProjectManagerDialog"
             @save-project-copy="openProjectSaveDialog"
@@ -6490,7 +12356,15 @@ onBeforeUnmount(() => {
         </footer>
 
         <div v-if="dialogMode" class="dialog-mask" @click.self="closeDialog">
-            <div class="dialog-card">
+            <div
+                :class="[
+                    'dialog-card',
+                    {
+                        'dialog-card--asset-library':
+                            dialogMode === 'asset-library',
+                    },
+                ]"
+            >
                 <template v-if="dialogMode === 'template'">
                     <div class="dialog-card__header">
                         <div>
@@ -6571,10 +12445,14 @@ onBeforeUnmount(() => {
                     <div class="dialog-card__header">
                         <div>
                             <p>项目导入</p>
-                            <h3>将外部 JSON 导入为新的本地项目记录</h3>
+                            <h3>将项目包或项目 JSON 导入为新的本地项目记录</h3>
                         </div>
                         <button class="ghost" @click="closeDialog">关闭</button>
                     </div>
+
+                    <p class="inspector-tip">
+                        支持新版项目包（含本地资源），也兼容旧版纯项目 JSON。
+                    </p>
 
                     <label class="dialog-card__field">
                         <span>项目名称</span>
@@ -6589,7 +12467,7 @@ onBeforeUnmount(() => {
                         v-model="dialogText"
                         class="dialog-card__textarea"
                         spellcheck="false"
-                        placeholder="请粘贴项目 JSON"
+                        placeholder="请粘贴项目包或项目 JSON"
                     />
 
                     <div class="dialog-card__actions">
@@ -6602,11 +12480,891 @@ onBeforeUnmount(() => {
                     </div>
                 </template>
 
+                <template v-else-if="dialogMode === 'asset-library'">
+                    <div class="dialog-card__header">
+                        <div>
+                            <p>资源中心</p>
+                            <h3>上传本地图片/视频，并快速插入或应用到当前组件</h3>
+                        </div>
+                        <button class="ghost" @click="closeDialog">关闭</button>
+                    </div>
+
+                    <div class="asset-library-summary-grid">
+                        <div class="dialog-card__summary">
+                            <span>资源总数</span>
+                            <strong>{{ assetLibrarySummary.total }} 个</strong>
+                            <span>
+                                图片 {{ assetLibrarySummary.image }} 个 · 视频
+                                {{ assetLibrarySummary.video }} 个
+                            </span>
+                        </div>
+                        <div class="dialog-card__summary">
+                            <span>当前筛选结果</span>
+                            <strong>{{ filteredAssetLibrary.length }} 个</strong>
+                            <span>
+                                {{
+                                    assetLibraryViewMode === 'grouped'
+                                        ? assetLibraryGroupCount
+                                            ? `按标签分组显示，共 ${assetLibraryGroupCount} 组，同一资源可在多个标签组中出现`
+                                            : "当前分组视图下没有可展示的标签组"
+                                        : hasAssetLibraryFilters
+                                          ? "已按关键词、类型或标签过滤"
+                                          : "显示全部本地资源"
+                                }}
+                            </span>
+                        </div>
+                        <div class="dialog-card__summary">
+                            <span>当前选中组件</span>
+                            <strong>{{
+                                selectedWidget?.name || "未选中可应用组件"
+                            }}</strong>
+                            <span>
+                                {{
+                                    selectedWidgetCanReceiveAsset
+                                        ? selectedWidgetAssetTargetMode === "image"
+                                            ? "可直接应用图片资源"
+                                            : "可直接应用视频资源，也支持图片封面"
+                                        : "选中图片或视频组件后，可一键应用资源"
+                                }}
+                            </span>
+                        </div>
+                        <div
+                            :class="[
+                                'dialog-card__summary',
+                                'asset-library__summary-card',
+                                {
+                                    'asset-library__summary-card--warning':
+                                        missingAssetReferenceReport.totalEntries,
+                                },
+                            ]"
+                        >
+                            <span>异常引用</span>
+                            <strong>
+                                {{ missingAssetReferenceReport.totalEntries }} 处
+                            </strong>
+                            <span>
+                                {{
+                                    missingAssetReferenceReport.totalEntries
+                                        ? `涉及 ${missingAssetReferenceReport.uniqueAssetCount} 个缺失资源，建议优先处理当前项目中的异常`
+                                        : "当前项目、项目快照和发布版本中都没有检测到失效资源引用"
+                                }}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="asset-library-toolbar">
+                        <label class="asset-library__upload">
+                            <input
+                                :key="assetLibraryUploadInputKey"
+                                type="file"
+                                accept="image/*,video/*"
+                                multiple
+                                @change="handleAssetLibraryUpload"
+                            />
+                            <span>{{
+                                assetLibraryLoading ? "处理中..." : "上传本地资源"
+                            }}</span>
+                        </label>
+
+                        <label class="publish-filter-field">
+                            <span>搜索资源</span>
+                            <input
+                                v-model="assetLibrarySearchKeyword"
+                                type="text"
+                                placeholder="搜索资源名、标签、类型、引用标识"
+                            />
+                        </label>
+
+                        <label class="publish-filter-field">
+                            <span>资源类型</span>
+                            <select v-model="assetLibraryFilterKind">
+                                <option
+                                    v-for="option in ASSET_KIND_OPTIONS"
+                                    :key="`asset-kind-${option.value}`"
+                                    :value="option.value"
+                                >
+                                    {{ option.label }}
+                                </option>
+                            </select>
+                        </label>
+
+                        <label class="publish-filter-field">
+                            <span>资源标签</span>
+                            <select v-model="assetLibraryFilterTag">
+                                <option
+                                    v-for="option in assetLibraryTagOptions"
+                                    :key="`asset-tag-${option.value}`"
+                                    :value="option.value"
+                                >
+                                    {{ option.label }}
+                                </option>
+                            </select>
+                        </label>
+
+                        <div class="asset-library-toolbar__actions">
+                            <button
+                                v-for="option in ASSET_LIBRARY_VIEW_MODE_OPTIONS"
+                                :key="`asset-view-mode-${option.value}`"
+                                :class="[
+                                    'ghost',
+                                    'asset-library__view-button',
+                                    {
+                                        'is-active':
+                                            assetLibraryViewMode ===
+                                            option.value,
+                                    },
+                                ]"
+                                @click="setAssetLibraryViewMode(option.value)"
+                            >
+                                {{ option.label }}
+                            </button>
+                            <button
+                                v-if="
+                                    assetLibraryViewMode === 'grouped' &&
+                                    assetLibraryGroupCount
+                                "
+                                class="ghost"
+                                @click="
+                                    isAllAssetGroupsCollapsed
+                                        ? expandAllAssetGroups()
+                                        : collapseAllAssetGroups()
+                                "
+                            >
+                                {{
+                                    isAllAssetGroupsCollapsed
+                                        ? "展开全部分组"
+                                        : "折叠全部分组"
+                                }}
+                            </button>
+                            <button
+                                v-if="hasAssetLibraryFilters"
+                                class="ghost"
+                                @click="resetAssetLibraryFilters"
+                            >
+                                清空筛选
+                            </button>
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="missingAssetReferenceReport.totalEntries"
+                        class="asset-library__warning-panel"
+                    >
+                        <div class="asset-library__warning-head">
+                            <div class="asset-library__warning-copy">
+                                <strong>检测到失效资源引用</strong>
+                                <p>
+                                    这些条目引用了本地资源中心中不存在的
+                                    `asset://` 资源，常见于导入旧项目、切换环境或资源未同步完成。
+                                </p>
+                            </div>
+                            <div class="project-library__tag-list">
+                                <span class="project-library__tag asset-library__warning-tag">
+                                    当前项目
+                                    {{ missingAssetReferenceReport.currentProjectCount }}
+                                    处
+                                </span>
+                                <span class="project-library__tag asset-library__warning-tag">
+                                    项目快照
+                                    {{ missingAssetReferenceReport.projectRecordCount }}
+                                    处
+                                </span>
+                                <span class="project-library__tag asset-library__warning-tag">
+                                    发布版本
+                                    {{ missingAssetReferenceReport.publishedSnapshotCount }}
+                                    处
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="asset-library__warning-sections">
+                            <section
+                                v-for="section in missingAssetReferenceReport.sections"
+                                :key="`missing-asset-section-${section.key}`"
+                                class="asset-library__warning-section"
+                            >
+                                <div class="asset-library__warning-section-title">
+                                    <strong>{{ section.label }}</strong>
+                                    <small>{{ section.entries.length }} 处</small>
+                                </div>
+
+                                <div class="asset-library__warning-list">
+                                    <article
+                                        v-for="entry in section.entries"
+                                        :key="entry.id"
+                                        class="asset-library__warning-item"
+                                    >
+                                        <div class="asset-library__usage-item-head">
+                                            <div class="asset-library__usage-badges">
+                                                <span class="asset-library__usage-badge">
+                                                    {{ entry.scopeName }}
+                                                </span>
+                                                <span
+                                                    class="asset-library__usage-badge asset-library__usage-badge--muted"
+                                                >
+                                                    {{ entry.locationTypeLabel }}
+                                                </span>
+                                            </div>
+                                            <div class="asset-library__warning-actions">
+                                                <label
+                                                    class="asset-library__action-upload asset-library__action-upload--warning"
+                                                    :class="{
+                                                        'is-disabled':
+                                                            assetLibraryLoading,
+                                                    }"
+                                                >
+                                                    <input
+                                                        type="file"
+                                                        :accept="
+                                                            getMissingAssetRepairAccept(
+                                                                entry,
+                                                            )
+                                                        "
+                                                        @change="
+                                                            handleMissingAssetRepairUpload(
+                                                                entry,
+                                                                $event,
+                                                            )
+                                                        "
+                                                    />
+                                                    <span>{{
+                                                        assetLibraryLoading
+                                                            ? '处理中...'
+                                                            : '上传修复'
+                                                    }}</span>
+                                                </label>
+                                                <button
+                                                    v-if="
+                                                        canLocateAssetUsageEntry(
+                                                            entry,
+                                                        )
+                                                    "
+                                                    class="ghost asset-library__usage-action"
+                                                    type="button"
+                                                    @click="
+                                                        locateAssetUsageEntry(
+                                                            entry,
+                                                        )
+                                                    "
+                                                >
+                                                    {{
+                                                        getAssetUsageEntryActionLabel(
+                                                            entry,
+                                                        )
+                                                    }}
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <strong>{{ entry.primaryLabel }}</strong>
+                                        <p>{{ entry.secondaryLabel }}</p>
+                                        <p
+                                            class="project-library__note asset-library__warning-reference"
+                                        >
+                                            {{ entry.reference }}
+                                        </p>
+                                        <div class="project-library__tag-list">
+                                            <span
+                                                v-for="fieldPath in entry.fieldPaths.slice(
+                                                    0,
+                                                    4,
+                                                )"
+                                                :key="`${entry.id}-${fieldPath}`"
+                                                class="project-library__tag project-library__tag--muted"
+                                            >
+                                                字段 {{ fieldPath }}
+                                            </span>
+                                            <span
+                                                class="project-library__tag project-library__tag--muted"
+                                            >
+                                                同 ID 共
+                                                {{
+                                                    getMissingAssetReferenceRepairCount(
+                                                        entry.assetId,
+                                                    )
+                                                }}
+                                                处
+                                            </span>
+                                            <span
+                                                class="project-library__tag project-library__tag--muted"
+                                            >
+                                                {{
+                                                    buildMissingAssetRepairHint(
+                                                        entry,
+                                                    )
+                                                }}
+                                            </span>
+                                            <span
+                                                v-if="entry.fieldPaths.length > 4"
+                                                class="project-library__tag project-library__tag--muted"
+                                            >
+                                                另有
+                                                {{ entry.fieldPaths.length - 4 }}
+                                                处字段
+                                            </span>
+                                        </div>
+                                    </article>
+                                </div>
+                            </section>
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="assetLibrarySummary.total"
+                        class="publish-batch-bar asset-library__batch-bar"
+                    >
+                        <label class="publish-batch-bar__checkbox">
+                            <input
+                                :checked="isAllFilteredAssetsSelected"
+                                :disabled="
+                                    !filteredAssetLibrary.length ||
+                                    assetLibraryLoading
+                                "
+                                type="checkbox"
+                                @change="toggleAllFilteredAssetsSelection"
+                            />
+                            <span>
+                                全选当前结果（{{
+                                    selectedFilteredAssetLibrary.length
+                                }}/{{ filteredAssetLibrary.length }}）
+                            </span>
+                        </label>
+
+                        <div class="publish-batch-bar__summary">
+                            <span>已选 {{ selectedAssetCount }} 个资源</span>
+                            <span v-if="selectedAssetCount">
+                                可删除 {{ selectedAssetDeletableCount }} 个 ·
+                                已引用 {{ selectedAssetReferencedCount }} 个
+                            </span>
+                            <span v-if="selectedAssetReferencedCount">
+                                已引用资源需要先替换组件或项目中的引用后再删除
+                            </span>
+                        </div>
+
+                        <div class="publish-batch-bar__field-options">
+                            <label class="publish-filter-field asset-library__batch-field">
+                                <span>标签操作</span>
+                                <select v-model="assetBatchTagMode">
+                                    <option
+                                        v-for="option in ASSET_BATCH_TAG_MODE_OPTIONS"
+                                        :key="`asset-batch-tag-mode-${option.value}`"
+                                        :value="option.value"
+                                    >
+                                        {{ option.label }}
+                                    </option>
+                                </select>
+                            </label>
+
+                            <label
+                                v-if="assetBatchTagMode !== 'clear'"
+                                class="publish-filter-field asset-library__batch-field"
+                            >
+                                <span>{{
+                                    assetBatchTagMode === 'append'
+                                        ? '追加内容'
+                                        : '覆盖内容'
+                                }}</span>
+                                <input
+                                    v-model="assetBatchTagDraft"
+                                    type="text"
+                                    placeholder="多个标签请用逗号分隔"
+                                />
+                            </label>
+
+                            <button
+                                class="ghost"
+                                :disabled="
+                                    !canBatchApplyAssetTags ||
+                                    assetLibraryLoading
+                                "
+                                @click="applyBatchAssetTags"
+                            >
+                                {{
+                                    assetBatchTagMode === 'clear'
+                                        ? '清空所选标签'
+                                        : assetBatchTagMode === 'replace'
+                                          ? '覆盖所选标签'
+                                          : '追加到所选标签'
+                                }}
+                            </button>
+                        </div>
+
+                        <div class="publish-batch-bar__actions">
+                            <button
+                                class="ghost"
+                                :disabled="!selectedAssetCount"
+                                @click="copySelectedAssetReferences"
+                            >
+                                复制所选引用
+                            </button>
+                            <button
+                                class="ghost"
+                                :disabled="!selectedAssetCount"
+                                @click="clearAssetSelection"
+                            >
+                                清空选择
+                            </button>
+                            <button
+                                class="ghost danger"
+                                :disabled="
+                                    !selectedAssetDeletableCount ||
+                                    assetLibraryLoading
+                                "
+                                @click="batchDeleteSelectedAssets"
+                            >
+                                批量删除
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="project-library asset-library">
+                        <template
+                            v-for="item in assetLibraryRenderItems"
+                            :key="item.key"
+                        >
+                            <button
+                                v-if="item.type === 'group'"
+                                class="asset-library__group-header"
+                                :class="{
+                                    'is-collapsed': collapsedAssetGroupKeySet.has(
+                                        item.group.key,
+                                    ),
+                                }"
+                                type="button"
+                                @click="
+                                    toggleAssetGroupCollapsed(item.group.key)
+                                "
+                            >
+                                <span class="asset-library__group-copy">
+                                    <strong>{{
+                                        item.group.label
+                                    }}</strong>
+                                    <small>
+                                        {{ item.group.assets.length }} 个资源
+                                    </small>
+                                </span>
+                                <span class="asset-library__group-toggle">
+                                    {{
+                                        collapsedAssetGroupKeySet.has(
+                                            item.group.key,
+                                        )
+                                            ? "展开"
+                                            : "收起"
+                                    }}
+                                </span>
+                            </button>
+
+                            <article
+                                v-else
+                                :class="[
+                                    'project-library__item',
+                                    'asset-library__item',
+                                    {
+                                        'is-selected': selectedAssetIdSet.has(
+                                            item.asset.id,
+                                        ),
+                                    },
+                                ]"
+                            >
+                            <label class="project-library__select">
+                                <input
+                                    :checked="selectedAssetIdSet.has(item.asset.id)"
+                                    :disabled="assetLibraryLoading"
+                                    type="checkbox"
+                                    @change="toggleAssetSelection(item.asset.id)"
+                                />
+                            </label>
+
+                            <div class="asset-library__preview">
+                                <img
+                                    v-if="
+                                        item.asset.kind === 'image' &&
+                                        assetPreviewUrlMap[item.asset.id]
+                                    "
+                                    :src="assetPreviewUrlMap[item.asset.id]"
+                                    :alt="item.asset.name"
+                                />
+                                <video
+                                    v-else-if="
+                                        item.asset.kind === 'video' &&
+                                        assetPreviewUrlMap[item.asset.id]
+                                    "
+                                    :src="assetPreviewUrlMap[item.asset.id]"
+                                    muted
+                                    preload="metadata"
+                                />
+                                <span v-else>{{
+                                    getAssetKindLabel(item.asset.kind)
+                                }}</span>
+                            </div>
+
+                            <div class="project-library__meta">
+                                <div
+                                    class="project-library__title-row asset-library__title-row"
+                                >
+                                    <div
+                                        v-if="assetEditingId === item.asset.id"
+                                        class="asset-library__name-editor"
+                                    >
+                                        <input
+                                            :data-asset-rename-input="item.asset.id"
+                                            v-model="assetDraftName"
+                                            class="asset-library__name-input"
+                                            type="text"
+                                            maxlength="120"
+                                            placeholder="请输入资源名称"
+                                            @keydown.enter.prevent="
+                                                renameAssetInLibrary(item.asset.id)
+                                            "
+                                            @keydown.esc.prevent="
+                                                cancelAssetRename()
+                                            "
+                                        />
+                                    </div>
+                                    <strong v-else>{{ item.asset.name }}</strong>
+                                    <div class="project-library__badges">
+                                        <span class="project-library__badge">
+                                            {{ getAssetKindLabel(item.asset.kind) }}
+                                        </span>
+                                        <span
+                                            v-if="
+                                                getAssetUsageInfo(item.asset.id)
+                                                    .total
+                                            "
+                                            class="project-library__badge project-library__badge--action"
+                                        >
+                                            已引用
+                                        </span>
+                                    </div>
+                                </div>
+                                <span>
+                                    {{ formatAssetFileSize(item.asset.size) }} ·
+                                    {{
+                                        new Date(
+                                            item.asset.updatedAt,
+                                        ).toLocaleString(
+                                            "zh-CN",
+                                            {
+                                                hour12: false,
+                                            },
+                                        )
+                                    }}
+                                </span>
+                                <p class="project-library__note">
+                                    {{ item.asset.reference }}
+                                </p>
+                                <div class="project-library__tag-list">
+                                    <span class="project-library__tag">
+                                        {{ item.asset.mimeType || "未知类型" }}
+                                    </span>
+                                    <span class="project-library__tag">
+                                        {{ buildAssetUsageLabel(item.asset.id) }}
+                                    </span>
+                                    <button
+                                        v-for="tag in item.asset.tags || []"
+                                        :key="`asset-tag-chip-${item.asset.id}-${tag}`"
+                                        class="project-library__tag project-library__tag--interactive"
+                                        type="button"
+                                        @click="setAssetLibraryTagFilter(tag)"
+                                    >
+                                        # {{ tag }}
+                                    </button>
+                                    <span
+                                        v-if="!(item.asset.tags || []).length"
+                                        class="project-library__tag project-library__tag--muted"
+                                    >
+                                        未分类
+                                    </span>
+                                </div>
+                                <div
+                                    v-if="assetTagEditingId === item.asset.id"
+                                    class="asset-library__tag-editor"
+                                >
+                                    <input
+                                        :data-asset-tag-input="item.asset.id"
+                                        v-model="assetTagDraftValue"
+                                        class="asset-library__tag-input"
+                                        type="text"
+                                        maxlength="160"
+                                        placeholder="输入标签，使用逗号分隔"
+                                        @keydown.enter.prevent="
+                                            saveAssetTags(item.asset.id)
+                                        "
+                                        @keydown.esc.prevent="
+                                            cancelAssetTagEdit()
+                                        "
+                                    />
+                                    <span class="asset-library__tag-hint">
+                                        例如：封面图, 首页, 品牌素材
+                                    </span>
+                                </div>
+                                <div
+                                    v-if="
+                                        isAssetUsageExpanded(item.asset.id) &&
+                                        getAssetUsageInfo(item.asset.id).total
+                                    "
+                                    class="asset-library__usage"
+                                >
+                                    <div class="asset-library__usage-header">
+                                        <strong>引用位置</strong>
+                                        <span>
+                                            {{
+                                                getAssetUsageInfo(item.asset.id)
+                                                    .totalEntries
+                                            }} 处
+                                        </span>
+                                    </div>
+                                    <section
+                                        v-for="section in getAssetUsageSections(
+                                            item.asset.id,
+                                        )"
+                                        :key="
+                                            `asset-usage-${item.asset.id}-${section.key}`
+                                        "
+                                        class="asset-library__usage-section"
+                                    >
+                                        <div
+                                            class="asset-library__usage-section-title"
+                                        >
+                                            <strong>{{ section.label }}</strong>
+                                            <small>
+                                                {{ section.entries.length }} 处
+                                            </small>
+                                        </div>
+                                        <div class="asset-library__usage-list">
+                                            <article
+                                                v-for="entry in section.entries"
+                                                :key="entry.id"
+                                                class="asset-library__usage-item"
+                                            >
+                                                <div
+                                                    class="asset-library__usage-item-head"
+                                                >
+                                                    <div
+                                                        class="asset-library__usage-badges"
+                                                    >
+                                                        <span
+                                                            class="asset-library__usage-badge"
+                                                        >
+                                                            {{ entry.scopeName }}
+                                                        </span>
+                                                        <span
+                                                            class="asset-library__usage-badge asset-library__usage-badge--muted"
+                                                        >
+                                                            {{
+                                                                entry.locationTypeLabel
+                                                            }}
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        v-if="
+                                                            canLocateAssetUsageEntry(
+                                                                entry,
+                                                            )
+                                                        "
+                                                        class="ghost asset-library__usage-action"
+                                                        type="button"
+                                                        @click="
+                                                            locateAssetUsageEntry(
+                                                                entry,
+                                                            )
+                                                        "
+                                                    >
+                                                        {{
+                                                            getAssetUsageEntryActionLabel(
+                                                                entry,
+                                                            )
+                                                        }}
+                                                    </button>
+                                                </div>
+                                                <strong>
+                                                    {{ entry.primaryLabel }}
+                                                </strong>
+                                                <p>
+                                                    {{ entry.secondaryLabel }}
+                                                </p>
+                                            </article>
+                                        </div>
+                                    </section>
+                                </div>
+                            </div>
+
+                            <div class="project-library__actions">
+                                <button
+                                    v-if="assetEditingId === item.asset.id"
+                                    class="ghost"
+                                    :disabled="assetLibraryLoading"
+                                    @click="renameAssetInLibrary(item.asset.id)"
+                                >
+                                    保存名称
+                                </button>
+                                <button
+                                    v-else
+                                    class="ghost"
+                                    :disabled="assetLibraryLoading"
+                                    @click="startAssetRename(item.asset.id)"
+                                >
+                                    重命名
+                                </button>
+                                <button
+                                    v-if="assetTagEditingId === item.asset.id"
+                                    class="ghost"
+                                    :disabled="assetLibraryLoading"
+                                    @click="saveAssetTags(item.asset.id)"
+                                >
+                                    保存标签
+                                </button>
+                                <button
+                                    v-else
+                                    class="ghost"
+                                    :disabled="assetLibraryLoading"
+                                    @click="startAssetTagEdit(item.asset.id)"
+                                >
+                                    编辑标签
+                                </button>
+                                <button
+                                    v-if="assetEditingId === item.asset.id"
+                                    class="ghost"
+                                    :disabled="assetLibraryLoading"
+                                    @click="cancelAssetRename()"
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    v-if="assetTagEditingId === item.asset.id"
+                                    class="ghost"
+                                    :disabled="assetLibraryLoading"
+                                    @click="cancelAssetTagEdit()"
+                                >
+                                    取消标签
+                                </button>
+                                <label
+                                    class="asset-library__action-upload"
+                                    :class="{
+                                        'is-disabled': assetLibraryLoading,
+                                    }"
+                                >
+                                    <input
+                                        type="file"
+                                        :accept="
+                                            item.asset.kind === 'image'
+                                                ? 'image/*'
+                                                : 'video/*'
+                                        "
+                                        @change="
+                                            handleAssetReplacement(
+                                                item.asset.id,
+                                                $event,
+                                            )
+                                        "
+                                    />
+                                    <span>{{
+                                        assetLibraryLoading
+                                            ? '处理中...'
+                                            : '替换文件'
+                                    }}</span>
+                                </label>
+                                <button
+                                    class="ghost"
+                                    :disabled="assetLibraryLoading"
+                                    @click="copyAssetReference(item.asset.id)"
+                                >
+                                    复制引用
+                                </button>
+                                <button
+                                    v-if="getAssetUsageInfo(item.asset.id).total"
+                                    class="ghost"
+                                    :disabled="assetLibraryLoading"
+                                    @click="
+                                        toggleAssetUsageExpanded(item.asset.id)
+                                    "
+                                >
+                                    {{
+                                        buildAssetUsageToggleLabel(
+                                            item.asset.id,
+                                        )
+                                    }}
+                                </button>
+                                <button
+                                    class="ghost"
+                                    :disabled="assetLibraryLoading"
+                                    @click="addAssetWidgetToCanvas(item.asset.id)"
+                                >
+                                    插入组件
+                                </button>
+                                <button
+                                    v-if="
+                                        canApplyAssetToSelectedWidget(
+                                            item.asset,
+                                        )
+                                    "
+                                    class="ghost"
+                                    :disabled="assetLibraryLoading"
+                                    @click="
+                                        applyAssetToSelectedWidget(item.asset.id)
+                                    "
+                                >
+                                    应用到当前组件
+                                </button>
+                                <button
+                                    v-if="canApplyAssetAsVideoPoster(item.asset)"
+                                    class="ghost"
+                                    :disabled="assetLibraryLoading"
+                                    @click="
+                                        applyAssetToSelectedWidget(item.asset.id, {
+                                            mode: 'poster',
+                                        })
+                                    "
+                                >
+                                    设为视频封面
+                                </button>
+                                <button
+                                    class="ghost danger"
+                                    :disabled="
+                                        assetLibraryLoading ||
+                                        getAssetUsageInfo(item.asset.id)
+                                            .total > 0
+                                    "
+                                    @click="
+                                        deleteAssetFromLibraryById(
+                                            item.asset.id,
+                                        )
+                                    "
+                                >
+                                    删除
+                                </button>
+                            </div>
+                            </article>
+                        </template>
+
+                        <p v-if="assetLibraryLoading" class="project-library__empty">
+                            正在加载本地资源，请稍候。
+                        </p>
+                        <p
+                            v-else-if="assetLibraryReady && !filteredAssetLibrary.length"
+                            class="project-library__empty"
+                        >
+                            {{
+                                assetLibrarySummary.total
+                                    ? "没有匹配的资源，调整搜索词或类型后再试试。"
+                                    : missingAssetReferenceReport.totalEntries
+                                      ? "本地资源库还是空的，但已检测到失效资源引用，建议先上传资源或回到对应页面修复。"
+                                      : "资源中心还是空的，先上传几张图片或视频来复用吧。"
+                            }}
+                        </p>
+                    </div>
+                </template>
+
                 <template v-else-if="dialogMode === 'project-publish'">
                     <div class="dialog-card__header">
                         <div>
                             <p>发布中心</p>
-                            <h3>生成冻结快照并复制独立运行链接</h3>
+                            <h3>
+                                {{
+                                    editingPublishedSnapshot
+                                        ? "编辑发布信息、比对版本差异并回滚"
+                                        : "生成冻结快照并复制独立运行链接"
+                                }}
+                            </h3>
                         </div>
                         <button class="ghost" @click="closeDialog">关闭</button>
                     </div>
@@ -6620,6 +13378,76 @@ onBeforeUnmount(() => {
                         />
                     </label>
 
+                    <label class="dialog-card__field">
+                        <span>发布备注</span>
+                        <textarea
+                            v-model="publishedSnapshotDraftNote"
+                            rows="3"
+                            placeholder="可选：补充本次发布说明，例如数据版本、修复内容、联调环境等"
+                        />
+                    </label>
+
+                    <label class="dialog-card__field">
+                        <span>发布环境</span>
+                        <select v-model="publishedSnapshotDraftEnvironment">
+                            <option
+                                v-for="option in PUBLISHED_ENVIRONMENT_OPTIONS"
+                                :key="option.value"
+                                :value="option.value"
+                            >
+                                {{ option.label }}
+                            </option>
+                        </select>
+                    </label>
+
+                    <label class="dialog-card__field">
+                        <span>审批状态</span>
+                        <select v-model="publishedSnapshotDraftApprovalStatus">
+                            <option
+                                v-for="option in PUBLISHED_APPROVAL_STATUS_OPTIONS"
+                                :key="option.value"
+                                :value="option.value"
+                            >
+                                {{ option.label }}
+                            </option>
+                        </select>
+                    </label>
+
+                    <label class="dialog-card__field">
+                        <span>审批人</span>
+                        <input
+                            v-model="publishedSnapshotDraftApprovalReviewer"
+                            type="text"
+                            placeholder="可选：填写审核人或责任人，例如 张三"
+                        />
+                    </label>
+
+                    <label class="dialog-card__field">
+                        <span>{{
+                            getPublishedApprovalCommentLabel(
+                                publishedSnapshotDraftApprovalStatus,
+                            )
+                        }}</span>
+                        <textarea
+                            v-model="publishedSnapshotDraftApprovalComment"
+                            rows="2"
+                            :placeholder="
+                                getPublishedApprovalCommentPlaceholder(
+                                    publishedSnapshotDraftApprovalStatus,
+                                )
+                            "
+                        />
+                    </label>
+
+                    <label class="dialog-card__field">
+                        <span>版本标签</span>
+                        <input
+                            v-model="publishedSnapshotDraftTags"
+                            type="text"
+                            placeholder="多个标签用逗号分隔，例如 首页大屏, 周报, V2"
+                        />
+                    </label>
+
                     <div class="dialog-card__summary">
                         <span>当前发布入口</span>
                         <strong>
@@ -6627,6 +13455,86 @@ onBeforeUnmount(() => {
                             {{ project.pages.length }} 个页面 /
                             {{ project.dataSources.length }} 个数据源
                         </strong>
+                        <span>
+                            目标环境：{{
+                                formatPublishedEnvironmentLabel(
+                                    publishedSnapshotDraftEnvironment,
+                                )
+                            }}
+                        </span>
+                        <span>
+                            审批状态：{{
+                                formatPublishedApprovalStatusLabel(
+                                    publishedSnapshotDraftApprovalStatus,
+                                )
+                            }}
+                        </span>
+                        <span v-if="publishedSnapshotDraftApprovalReviewer">
+                            审批人：{{ publishedSnapshotDraftApprovalReviewer }}
+                        </span>
+                    </div>
+
+                    <div
+                        v-if="editingPublishedSnapshot"
+                        class="dialog-card__summary"
+                    >
+                        <span>当前编辑版本</span>
+                        <strong>{{ editingPublishedSnapshot.name }}</strong>
+                        <span>
+                            {{
+                                formatPublishedEnvironmentLabel(
+                                    editingPublishedSnapshot.environment,
+                                )
+                            }}
+                        </span>
+                        <span>
+                            {{
+                                formatPublishedApprovalStatusLabel(
+                                    editingPublishedSnapshot.approvalStatus,
+                                )
+                            }}
+                        </span>
+                        <span v-if="editingPublishedSnapshot.approvalReviewer">
+                            审批人：{{ editingPublishedSnapshot.approvalReviewer }}
+                        </span>
+                        <span>仅更新发布名称、审批、环境、标签和备注，不会覆盖发布内容</span>
+                    </div>
+
+                    <div
+                        v-if="latestProjectPublishedSnapshot"
+                        class="dialog-card__summary"
+                    >
+                        <span>最近一次发布</span>
+                        <strong>{{ latestProjectPublishedSnapshot.name }}</strong>
+                        <span>
+                            {{
+                                new Date(
+                                    latestProjectPublishedSnapshot.updatedAt,
+                                ).toLocaleString("zh-CN", { hour12: false })
+                            }}
+                        </span>
+                        <span>
+                            {{
+                                formatPublishedEnvironmentLabel(
+                                    latestProjectPublishedSnapshot.environment,
+                                )
+                            }}
+                        </span>
+                        <span>
+                            {{
+                                formatPublishedApprovalStatusLabel(
+                                    latestProjectPublishedSnapshot.approvalStatus,
+                                )
+                            }}
+                        </span>
+                        <span v-if="latestProjectPublishedSnapshot.approvalReviewer">
+                            审批人：{{
+                                latestProjectPublishedSnapshot.approvalReviewer
+                            }}
+                        </span>
+                        <span v-if="latestProjectPublishedSnapshot.note">
+                            {{ latestProjectPublishedSnapshot.note }}
+                        </span>
                     </div>
 
                     <p class="inspector-tip">
@@ -6637,28 +13545,431 @@ onBeforeUnmount(() => {
                     <div
                         class="dialog-card__actions dialog-card__actions--split"
                     >
-                        <button
-                            class="ghost"
-                            @click="
-                                publishedSnapshotDraftName =
-                                    buildPublishedSnapshotDraftName()
-                            "
-                        >
-                            重置名称
+                        <button class="ghost" @click="resetPublishDraft">
+                            重置草稿
                         </button>
-                        <button class="primary" @click="publishCurrentProjectSnapshot">
-                            生成发布快照
+                        <button
+                            v-if="editingPublishedSnapshot"
+                            class="ghost"
+                            @click="cancelPublishedSnapshotEdit"
+                        >
+                            取消编辑
+                        </button>
+                        <button
+                            v-else-if="latestProjectPublishedSnapshot"
+                            class="ghost"
+                            :disabled="latestProjectPublishedSnapshot.locked"
+                            @click="overwriteLatestPublishedSnapshot"
+                        >
+                            {{
+                                latestProjectPublishedSnapshot.locked
+                                    ? "最近版本已锁定"
+                                    : "覆盖最近发布"
+                            }}
+                        </button>
+                        <button class="primary" @click="applyPublishedSnapshotDraft">
+                            {{
+                                editingPublishedSnapshot
+                                    ? "保存发布信息"
+                                    : "生成发布快照"
+                            }}
                         </button>
                     </div>
 
-                    <div v-if="currentProjectPublishedSnapshots.length" class="project-library">
-                        <article
-                            v-for="snapshot in currentProjectPublishedSnapshots"
-                            :key="snapshot.id"
-                            class="project-library__item"
+                    <div class="publish-utility-bar">
+                        <button
+                            class="ghost"
+                            :disabled="!currentProjectPublishedSnapshots.length"
+                            @click="openPublishedSnapshotExportDialog"
                         >
+                            导出当前项目版本
+                        </button>
+                        <button
+                            class="ghost"
+                            @click="openPublishedSnapshotImportDialog"
+                        >
+                            导入版本包
+                        </button>
+                        <button
+                            v-if="currentProjectPublishedOperationLogs.length"
+                            class="ghost"
+                            @click="openPublishedOperationLogExportDialog"
+                        >
+                            导出操作日志
+                        </button>
+                    </div>
+
+                    <div
+                        v-if="currentProjectPublishedSnapshots.length"
+                        class="publish-stats-grid"
+                    >
+                        <button
+                            v-for="card in publishedSnapshotApprovalStatsCards"
+                            :key="card.key"
+                            :class="[
+                                'publish-stat-card',
+                                {
+                                    'is-active': card.active,
+                                    'is-all': card.key === 'all',
+                                    'is-pending': card.key === 'pending',
+                                    'is-approved': card.key === 'approved',
+                                    'is-rejected': card.key === 'rejected',
+                                    'is-unassigned':
+                                        card.key ===
+                                        PUBLISHED_APPROVAL_REVIEWER_FILTER_UNASSIGNED,
+                                },
+                            ]"
+                            type="button"
+                            @click="
+                                handlePublishedSnapshotApprovalStatsCard(card.key)
+                            "
+                        >
+                            <span>{{ card.label }}</span>
+                            <strong>{{ card.count }}</strong>
+                            <small>{{ card.detail }}</small>
+                        </button>
+                    </div>
+
+                    <div
+                        v-if="currentProjectPublishedSnapshots.length"
+                        class="publish-filter-bar"
+                    >
+                        <label class="publish-filter-field">
+                            <span>搜索版本</span>
+                                <input
+                                    v-model="publishedSnapshotSearchKeyword"
+                                    type="text"
+                                    placeholder="搜索名称、备注、页面、审批人、原因、标签"
+                                />
+                            </label>
+                        <label class="publish-filter-field">
+                            <span>环境筛选</span>
+                            <select v-model="publishedSnapshotFilterEnvironment">
+                                <option value="all">全部环境</option>
+                                <option
+                                    v-for="option in PUBLISHED_ENVIRONMENT_OPTIONS"
+                                    :key="option.value"
+                                    :value="option.value"
+                                >
+                                    {{ option.label }}
+                                </option>
+                            </select>
+                        </label>
+                        <label class="publish-filter-field">
+                            <span>审批状态</span>
+                            <select v-model="publishedSnapshotFilterApprovalStatus">
+                                <option
+                                    v-for="option in PUBLISHED_APPROVAL_FILTER_OPTIONS"
+                                    :key="`approval-${option.value}`"
+                                    :value="option.value"
+                                >
+                                    {{ option.label }}
+                                </option>
+                            </select>
+                        </label>
+                        <label class="publish-filter-field">
+                            <span>审批人</span>
+                            <select v-model="publishedSnapshotFilterApprovalReviewer">
+                                <option
+                                    v-for="option in currentProjectPublishedApprovalReviewerOptions"
+                                    :key="`reviewer-${option.value}`"
+                                    :value="option.value"
+                                >
+                                    {{ option.label }}
+                                </option>
+                            </select>
+                        </label>
+                        <label class="publish-filter-field">
+                            <span>锁定状态</span>
+                            <select v-model="publishedSnapshotFilterLockState">
+                                <option
+                                    v-for="option in PUBLISHED_LOCK_FILTER_OPTIONS"
+                                    :key="option.value"
+                                    :value="option.value"
+                                >
+                                    {{ option.label }}
+                                </option>
+                            </select>
+                        </label>
+                        <label class="publish-filter-field">
+                            <span>排序方式</span>
+                            <select v-model="publishedSnapshotSortMode">
+                                <option
+                                    v-for="option in PUBLISHED_SORT_OPTIONS"
+                                    :key="option.value"
+                                    :value="option.value"
+                                >
+                                    {{ option.label }}
+                                </option>
+                            </select>
+                        </label>
+                        <div class="publish-filter-summary">
+                            <span>
+                                显示 {{ filteredProjectPublishedSnapshots.length }} /
+                                {{ currentProjectPublishedSnapshots.length }} 个版本
+                            </span>
+                            <button
+                                v-if="hasPublishedSnapshotFilters"
+                                class="ghost"
+                                @click="resetPublishedSnapshotFilters"
+                            >
+                                清空筛选
+                            </button>
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="filteredProjectPublishedSnapshots.length"
+                        class="publish-batch-bar"
+                    >
+                        <label class="publish-batch-bar__checkbox">
+                            <input
+                                :checked="isAllFilteredPublishedSnapshotsSelected"
+                                type="checkbox"
+                                @change="toggleAllFilteredPublishedSnapshotsSelection"
+                            />
+                            <span>
+                                全选当前结果（{{
+                                    selectedFilteredPublishedSnapshots.length
+                                }}/{{ filteredProjectPublishedSnapshots.length }}）
+                            </span>
+                        </label>
+
+                        <div class="publish-batch-bar__summary">
+                            <span>
+                                已选 {{ selectedPublishedSnapshotCount }} 个版本
+                            </span>
+                            <span v-if="selectedPublishedSnapshotCount">
+                                未锁定 {{ selectedPublishedSnapshotUnlockedCount }} 个
+                                · 已置顶 {{ selectedPublishedSnapshotPinnedCount }} 个
+                            </span>
+                            <span v-if="selectedPublishedSnapshotCount">
+                                待审批 {{ selectedPublishedSnapshotPendingCount }} 个
+                                · 已通过 {{ selectedPublishedSnapshotApprovedCount }} 个
+                                · 已驳回 {{ selectedPublishedSnapshotRejectedCount }} 个
+                            </span>
+                            <span v-if="selectedPublishedSnapshotCount">
+                                批量编辑会使用上方“审批信息 / 发布环境 / 发布备注 / 版本标签”的当前内容
+                            </span>
+                        </div>
+
+                        <div class="publish-batch-bar__field-options">
+                            <label class="publish-batch-bar__field-toggle">
+                                <input
+                                    v-model="publishedSnapshotBatchApplyNote"
+                                    type="checkbox"
+                                />
+                                <span>应用上方备注</span>
+                            </label>
+                            <label class="publish-batch-bar__field-toggle">
+                                <input
+                                    v-model="publishedSnapshotBatchApplyTags"
+                                    type="checkbox"
+                                />
+                                <span>应用上方标签</span>
+                            </label>
+                            <label class="publish-batch-bar__field-toggle">
+                                <input
+                                    v-model="publishedSnapshotBatchApplyEnvironment"
+                                    type="checkbox"
+                                />
+                                <span>应用上方环境</span>
+                            </label>
+                            <label class="publish-batch-bar__field-toggle">
+                                <input
+                                    v-model="publishedSnapshotBatchApplyApprovalStatus"
+                                    type="checkbox"
+                                />
+                                <span>应用上方审批信息</span>
+                            </label>
+                            <button
+                                class="ghost"
+                                :disabled="!canBatchApplyPublishedSnapshotMeta"
+                                @click="batchApplyPublishedSnapshotMeta"
+                            >
+                                批量写入审批/环境/备注/标签
+                            </button>
+                        </div>
+
+                        <div class="publish-batch-bar__actions">
+                            <button
+                                class="ghost"
+                                :disabled="!selectedPublishedSnapshotApprovableCount"
+                                @click="
+                                    batchSetPublishedSnapshotApprovalStatus(
+                                        'approved',
+                                    )
+                                "
+                            >
+                                批量通过
+                            </button>
+                            <button
+                                class="ghost danger"
+                                :disabled="!selectedPublishedSnapshotRejectableCount"
+                                @click="
+                                    batchSetPublishedSnapshotApprovalStatus(
+                                        'rejected',
+                                    )
+                                "
+                            >
+                                批量驳回
+                            </button>
+                            <button
+                                class="ghost"
+                                :disabled="!selectedPublishedSnapshotCount"
+                                @click="openSelectedPublishedSnapshotRuntimes"
+                            >
+                                批量打开运行态
+                            </button>
+                            <button
+                                class="ghost"
+                                :disabled="!selectedPublishedSnapshotCount"
+                                @click="copySelectedPublishedSnapshotLinks"
+                            >
+                                批量复制链接
+                            </button>
+                            <button
+                                class="ghost"
+                                :disabled="!selectedPublishedSnapshotCount"
+                                @click="openSelectedPublishedSnapshotExportDialog"
+                            >
+                                导出所选
+                            </button>
+                            <button
+                                class="ghost"
+                                :disabled="!selectedPublishedSnapshotUnpinnedCount"
+                                @click="batchSetPublishedSnapshotPin(true)"
+                            >
+                                批量置顶
+                            </button>
+                            <button
+                                class="ghost"
+                                :disabled="!selectedPublishedSnapshotPinnedCount"
+                                @click="batchSetPublishedSnapshotPin(false)"
+                            >
+                                取消置顶
+                            </button>
+                            <button
+                                class="ghost"
+                                :disabled="!selectedPublishedSnapshotUnlockedCount"
+                                @click="batchSetPublishedSnapshotLock(true)"
+                            >
+                                批量锁定
+                            </button>
+                            <button
+                                class="ghost"
+                                :disabled="!selectedPublishedSnapshotLockedCount"
+                                @click="batchSetPublishedSnapshotLock(false)"
+                            >
+                                批量解锁
+                            </button>
+                            <button
+                                class="ghost danger"
+                                :disabled="!selectedPublishedSnapshotUnlockedCount"
+                                @click="batchDeletePublishedSnapshots"
+                            >
+                                批量删除
+                            </button>
+                            <button
+                                v-if="selectedPublishedSnapshotCount"
+                                class="ghost"
+                                @click="clearPublishedSnapshotSelection"
+                            >
+                                清空选择
+                            </button>
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="currentProjectPublishedSnapshots.length"
+                        class="project-library"
+                    >
+                        <article
+                            v-for="snapshot in filteredProjectPublishedSnapshots"
+                            :key="snapshot.id"
+                            :class="[
+                                'project-library__item',
+                                {
+                                    'is-active':
+                                        snapshot.id ===
+                                        latestProjectPublishedSnapshot?.id,
+                                    'is-selected':
+                                        selectedPublishedSnapshotSet.has(
+                                            snapshot.id,
+                                        ),
+                                    'is-locked': snapshot.locked,
+                                },
+                            ]"
+                        >
+                            <label class="project-library__select">
+                                <input
+                                    :checked="
+                                        selectedPublishedSnapshotSet.has(
+                                            snapshot.id,
+                                        )
+                                    "
+                                    type="checkbox"
+                                    @change="
+                                        togglePublishedSnapshotSelection(
+                                            snapshot.id,
+                                        )
+                                    "
+                                />
+                            </label>
+
                             <div class="project-library__meta">
-                                <strong>{{ snapshot.name }}</strong>
+                                <div class="project-library__title-row">
+                                    <strong>{{ snapshot.name }}</strong>
+                                    <div class="project-library__badges">
+                                        <span
+                                            v-if="
+                                                snapshot.id ===
+                                                latestProjectPublishedSnapshot?.id
+                                            "
+                                            class="project-library__badge"
+                                        >
+                                            最新发布
+                                        </span>
+                                        <span
+                                            :class="[
+                                                'project-library__badge',
+                                                'project-library__badge--environment',
+                                                `is-${snapshot.environment}`,
+                                            ]"
+                                        >
+                                            {{
+                                                formatPublishedEnvironmentLabel(
+                                                    snapshot.environment,
+                                                )
+                                            }}
+                                        </span>
+                                        <span
+                                            :class="[
+                                                'project-library__badge',
+                                                'project-library__badge--approval',
+                                                `is-${snapshot.approvalStatus}`,
+                                            ]"
+                                        >
+                                            {{
+                                                formatPublishedApprovalStatusLabel(
+                                                    snapshot.approvalStatus,
+                                                )
+                                            }}
+                                        </span>
+                                        <span
+                                            v-if="snapshot.pinned"
+                                            class="project-library__badge project-library__badge--pinned"
+                                        >
+                                            已置顶
+                                        </span>
+                                        <span
+                                            v-if="snapshot.locked"
+                                            class="project-library__badge project-library__badge--locked"
+                                        >
+                                            已锁定
+                                        </span>
+                                    </div>
+                                </div>
                                 <span>
                                     {{ snapshot.pageName }} ·
                                     {{
@@ -6668,6 +13979,177 @@ onBeforeUnmount(() => {
                                         )
                                     }}
                                 </span>
+                                <p
+                                    v-if="snapshot.note"
+                                    class="project-library__note"
+                                >
+                                    {{ snapshot.note }}
+                                </p>
+                                <div class="project-library__approval-meta">
+                                    <span>
+                                        审批人：{{
+                                            snapshot.approvalReviewer || "未填写"
+                                        }}
+                                    </span>
+                                    <span>
+                                        审批时间：{{
+                                            new Date(
+                                                snapshot.approvalUpdatedAt ||
+                                                    snapshot.updatedAt,
+                                            ).toLocaleString("zh-CN", {
+                                                hour12: false,
+                                            })
+                                        }}
+                                    </span>
+                                </div>
+                                <p
+                                    v-if="snapshot.approvalComment"
+                                    class="project-library__note project-library__note--approval"
+                                >
+                                    {{
+                                        getPublishedApprovalCommentLabel(
+                                            snapshot.approvalStatus,
+                                        )
+                                    }}：{{ snapshot.approvalComment }}
+                                </p>
+                                <div
+                                    v-if="snapshot.tags?.length"
+                                    class="project-library__tag-list"
+                                >
+                                    <span
+                                        v-for="tag in snapshot.tags"
+                                        :key="tag"
+                                        class="project-library__tag"
+                                    >
+                                        {{ tag }}
+                                    </span>
+                                </div>
+                                <div
+                                    v-if="
+                                        approvalTimelineSnapshotId === snapshot.id &&
+                                        snapshot.approvalHistory?.length
+                                    "
+                                    class="project-library__timeline"
+                                >
+                                    <section
+                                        v-for="entry in snapshot.approvalHistory"
+                                        :key="entry.id"
+                                        class="project-library__timeline-item"
+                                    >
+                                        <div class="project-library__timeline-head">
+                                            <span
+                                                :class="[
+                                                    'project-library__badge',
+                                                    'project-library__badge--approval',
+                                                    `is-${entry.status}`,
+                                                ]"
+                                            >
+                                                {{
+                                                    formatPublishedApprovalStatusLabel(
+                                                        entry.status,
+                                                    )
+                                                }}
+                                            </span>
+                                            <span>
+                                                {{
+                                                    entry.reviewer
+                                                        ? `审批人：${entry.reviewer}`
+                                                        : "未填写审批人"
+                                                }}
+                                            </span>
+                                            <span>
+                                                {{
+                                                    new Date(
+                                                        entry.changedAt,
+                                                    ).toLocaleString("zh-CN", {
+                                                        hour12: false,
+                                                    })
+                                                }}
+                                            </span>
+                                        </div>
+                                        <p
+                                            v-if="entry.comment"
+                                            class="project-library__timeline-comment"
+                                        >
+                                            {{
+                                                getPublishedApprovalCommentLabel(
+                                                    entry.status,
+                                                )
+                                            }}：{{ entry.comment }}
+                                        </p>
+                                    </section>
+                                </div>
+                                <div
+                                    v-if="publishDiffSnapshotId === snapshot.id"
+                                    class="project-library__diff"
+                                >
+                                    <p class="project-library__diff-summary">
+                                        {{
+                                            publishedSnapshotDiffMap[snapshot.id]
+                                                ?.summary
+                                        }}
+                                    </p>
+                                    <div
+                                        v-if="
+                                            publishedSnapshotDiffMap[snapshot.id]
+                                                ?.sections.length
+                                        "
+                                        class="project-library__diff-sections"
+                                    >
+                                        <section
+                                            v-for="section in publishedSnapshotDiffMap[
+                                                snapshot.id
+                                            ]?.sections"
+                                            :key="section.label"
+                                            class="project-library__diff-section"
+                                        >
+                                            <span
+                                                class="project-library__diff-section-title"
+                                            >
+                                                {{ section.label }}
+                                            </span>
+                                            <div
+                                                class="project-library__diff-section-list"
+                                            >
+                                                <p
+                                                    v-for="entry in section.entries"
+                                                    :key="`${section.label}-${entry}`"
+                                                    class="project-library__diff-entry"
+                                                >
+                                                    {{ entry }}
+                                                </p>
+                                            </div>
+                                        </section>
+                                    </div>
+                                </div>
+                                <div
+                                    v-if="pendingRollbackSnapshotId === snapshot.id"
+                                    class="project-library__rollback"
+                                >
+                                    <p class="project-library__rollback-text">
+                                        确认将当前编辑器回滚到
+                                        <strong>{{ snapshot.name }}</strong>
+                                        吗？当前未发布修改会覆盖本地项目，但仍可通过撤销恢复。
+                                    </p>
+                                    <div class="project-library__rollback-actions">
+                                        <button
+                                            class="ghost danger"
+                                            @click="
+                                                confirmPublishedSnapshotRollback(
+                                                    snapshot.id,
+                                                )
+                                            "
+                                        >
+                                            确认回滚
+                                        </button>
+                                        <button
+                                            class="ghost"
+                                            @click="cancelPublishedSnapshotRollback"
+                                        >
+                                            取消
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
 
                             <div class="project-library__actions">
@@ -6678,6 +14160,71 @@ onBeforeUnmount(() => {
                                     复制链接
                                 </button>
                                 <button
+                                    v-if="snapshot.approvalStatus !== 'approved'"
+                                    class="ghost"
+                                    :disabled="snapshot.locked"
+                                    @click="quickApprovePublishedSnapshot(snapshot.id)"
+                                >
+                                    一键通过
+                                </button>
+                                <button
+                                    v-if="snapshot.approvalStatus !== 'rejected'"
+                                    class="ghost danger"
+                                    :disabled="snapshot.locked"
+                                    @click="quickRejectPublishedSnapshot(snapshot.id)"
+                                >
+                                    一键驳回
+                                </button>
+                                <button
+                                    class="ghost"
+                                    :disabled="snapshot.locked"
+                                    @click="startPublishedSnapshotEdit(snapshot.id)"
+                                >
+                                    编辑信息
+                                </button>
+                                <button
+                                    class="ghost"
+                                    @click="togglePublishedSnapshotDiff(snapshot.id)"
+                                >
+                                    {{
+                                        publishDiffSnapshotId === snapshot.id
+                                            ? "收起差异"
+                                            : "查看差异"
+                                    }}
+                                </button>
+                                <button
+                                    class="ghost"
+                                    @click="
+                                        togglePublishedSnapshotApprovalTimeline(
+                                            snapshot.id,
+                                        )
+                                    "
+                                >
+                                    {{
+                                        approvalTimelineSnapshotId === snapshot.id
+                                            ? "收起审批线"
+                                            : "审批时间线"
+                                    }}
+                                </button>
+                                <button
+                                    class="ghost"
+                                    @click="togglePublishedSnapshotPin(snapshot.id)"
+                                >
+                                    {{ snapshot.pinned ? "取消置顶" : "置顶版本" }}
+                                </button>
+                                <button
+                                    class="ghost"
+                                    @click="togglePublishedSnapshotLock(snapshot.id)"
+                                >
+                                    {{ snapshot.locked ? "解除锁定" : "锁定版本" }}
+                                </button>
+                                <button
+                                    class="ghost"
+                                    @click="requestPublishedSnapshotRollback(snapshot.id)"
+                                >
+                                    回滚到编辑器
+                                </button>
+                                <button
                                     class="ghost"
                                     @click="activatePublishedRuntime(snapshot.id)"
                                 >
@@ -6685,15 +14232,311 @@ onBeforeUnmount(() => {
                                 </button>
                                 <button
                                     class="ghost danger"
+                                    :disabled="snapshot.locked"
                                     @click="deletePublishedSnapshot(snapshot.id)"
                                 >
                                     删除
                                 </button>
                             </div>
                         </article>
+
+                        <p
+                            v-if="!filteredProjectPublishedSnapshots.length"
+                            class="project-library__empty"
+                        >
+                            没有匹配的发布版本，调整搜索词或筛选条件后再试试。
+                        </p>
                     </div>
 
-                    <p v-else class="inspector-tip">
+                    <div
+                        v-if="currentProjectPublishedRollbackLogs.length"
+                        class="project-library__history"
+                    >
+                        <div class="project-library__history-header">
+                            <div class="dialog-card__summary">
+                                <span>回滚记录</span>
+                                <strong>
+                                    {{ currentProjectPublishedRollbackLogs.length }} 条
+                                </strong>
+                            </div>
+                            <div class="project-library__history-actions">
+                                <button
+                                    class="ghost danger"
+                                    @click="clearCurrentProjectPublishedRollbackLogs"
+                                >
+                                    清空记录
+                                </button>
+                            </div>
+                        </div>
+                        <div class="publish-filter-bar publish-filter-bar--history">
+                            <label class="publish-filter-field">
+                                <span>搜索记录</span>
+                                <input
+                                    v-model="publishedRollbackSearchKeyword"
+                                    type="text"
+                                    placeholder="搜索版本、页面、摘要、标签"
+                                />
+                            </label>
+                            <label class="publish-filter-field">
+                                <span>环境筛选</span>
+                                <select v-model="publishedRollbackFilterEnvironment">
+                                    <option value="all">全部环境</option>
+                                    <option
+                                        v-for="option in PUBLISHED_ENVIRONMENT_OPTIONS"
+                                        :key="`rollback-${option.value}`"
+                                        :value="option.value"
+                                    >
+                                        {{ option.label }}
+                                    </option>
+                                </select>
+                            </label>
+                            <label class="publish-filter-field">
+                                <span>关联状态</span>
+                                <select v-model="publishedRollbackFilterRelation">
+                                    <option
+                                        v-for="option in PUBLISHED_ROLLBACK_RELATION_FILTER_OPTIONS"
+                                        :key="option.value"
+                                        :value="option.value"
+                                    >
+                                        {{ option.label }}
+                                    </option>
+                                </select>
+                            </label>
+                            <div class="publish-filter-summary">
+                                <span>
+                                    显示 {{ filteredProjectPublishedRollbackLogs.length }} /
+                                    {{ currentProjectPublishedRollbackLogs.length }} 条记录
+                                </span>
+                                <button
+                                    v-if="hasPublishedRollbackFilters"
+                                    class="ghost"
+                                    @click="resetPublishedRollbackFilters"
+                                >
+                                    清空筛选
+                                </button>
+                            </div>
+                        </div>
+                        <div class="project-library__history-list">
+                            <article
+                                v-for="log in filteredProjectPublishedRollbackLogs"
+                                :key="log.id"
+                                class="project-library__history-item"
+                            >
+                                <div class="project-library__meta">
+                                    <div class="project-library__title-row">
+                                        <strong>{{ log.snapshotName }}</strong>
+                                        <span
+                                            :class="[
+                                                'project-library__badge',
+                                                'project-library__badge--environment',
+                                                `is-${log.environment}`,
+                                            ]"
+                                        >
+                                            {{
+                                                formatPublishedEnvironmentLabel(
+                                                    log.environment,
+                                                )
+                                            }}
+                                        </span>
+                                    </div>
+                                    <span>
+                                        {{ log.pageName }} ·
+                                        {{
+                                            new Date(log.rolledBackAt).toLocaleString(
+                                                "zh-CN",
+                                                { hour12: false },
+                                            )
+                                        }}
+                                    </span>
+                                    <p
+                                        v-if="log.summary"
+                                        class="project-library__note"
+                                    >
+                                        {{ log.summary }}
+                                    </p>
+                                    <div
+                                        v-if="log.tags?.length"
+                                        class="project-library__tag-list"
+                                    >
+                                        <span
+                                            v-for="tag in log.tags"
+                                            :key="`${log.id}-${tag}`"
+                                            class="project-library__tag"
+                                        >
+                                            {{ tag }}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="project-library__actions">
+                                    <button
+                                        class="ghost"
+                                        :disabled="
+                                            !hasCurrentProjectPublishedSnapshot(
+                                                log.snapshotId,
+                                            )
+                                        "
+                                        @click="
+                                            focusPublishedSnapshotFromRollbackLog(
+                                                log.id,
+                                            )
+                                        "
+                                    >
+                                        {{
+                                            hasCurrentProjectPublishedSnapshot(
+                                                log.snapshotId,
+                                            )
+                                                ? "定位版本"
+                                                : "版本已删除"
+                                        }}
+                                    </button>
+                                    <button
+                                        class="ghost danger"
+                                        @click="deletePublishedRollbackLog(log.id)"
+                                    >
+                                        删除记录
+                                    </button>
+                                </div>
+                            </article>
+                            <p
+                                v-if="!filteredProjectPublishedRollbackLogs.length"
+                                class="project-library__empty"
+                            >
+                                没有匹配的回滚记录，调整搜索词或筛选条件后再试试。
+                            </p>
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="currentProjectPublishedOperationLogs.length"
+                        class="project-library__history"
+                    >
+                        <div class="project-library__history-header">
+                            <div class="dialog-card__summary">
+                                <span>操作日志</span>
+                                <strong>
+                                    {{ currentProjectPublishedOperationLogs.length }} 条
+                                </strong>
+                            </div>
+                            <div class="project-library__history-actions">
+                                <button
+                                    class="ghost"
+                                    @click="openPublishedOperationLogExportDialog"
+                                >
+                                    导出日志
+                                </button>
+                                <button
+                                    class="ghost danger"
+                                    @click="clearCurrentProjectPublishedOperationLogs"
+                                >
+                                    清空日志
+                                </button>
+                            </div>
+                        </div>
+                        <div class="publish-filter-bar publish-filter-bar--operation">
+                            <label class="publish-filter-field">
+                                <span>搜索日志</span>
+                                <input
+                                    v-model="publishedOperationSearchKeyword"
+                                    type="text"
+                                    placeholder="搜索动作、摘要、详情、版本名"
+                                />
+                            </label>
+                            <label class="publish-filter-field">
+                                <span>动作筛选</span>
+                                <select v-model="publishedOperationFilterAction">
+                                    <option
+                                        v-for="option in PUBLISHED_OPERATION_ACTION_FILTER_OPTIONS"
+                                        :key="`operation-${option.value}`"
+                                        :value="option.value"
+                                    >
+                                        {{ option.label }}
+                                    </option>
+                                </select>
+                            </label>
+                            <div class="publish-filter-summary">
+                                <span>
+                                    显示 {{ filteredProjectPublishedOperationLogs.length }} /
+                                    {{ currentProjectPublishedOperationLogs.length }} 条日志
+                                </span>
+                                <button
+                                    v-if="hasPublishedOperationFilters"
+                                    class="ghost"
+                                    @click="resetPublishedOperationFilters"
+                                >
+                                    清空筛选
+                                </button>
+                            </div>
+                        </div>
+                        <div class="project-library__history-list">
+                            <article
+                                v-for="log in filteredProjectPublishedOperationLogs"
+                                :key="log.id"
+                                class="project-library__history-item"
+                            >
+                                <div class="project-library__meta">
+                                    <div class="project-library__title-row">
+                                        <strong>{{ log.summary }}</strong>
+                                        <span
+                                            class="project-library__badge project-library__badge--action"
+                                        >
+                                            {{ log.actionLabel }}
+                                        </span>
+                                    </div>
+                                    <span>
+                                        {{
+                                            new Date(log.createdAt).toLocaleString(
+                                                "zh-CN",
+                                                { hour12: false },
+                                            )
+                                        }}
+                                    </span>
+                                    <p
+                                        v-if="log.detail"
+                                        class="project-library__note"
+                                    >
+                                        {{ log.detail }}
+                                    </p>
+                                    <div
+                                        v-if="log.snapshotNames.length"
+                                        class="project-library__tag-list"
+                                    >
+                                        <span
+                                            v-for="snapshotName in log.snapshotNames"
+                                            :key="`${log.id}-${snapshotName}`"
+                                            class="project-library__tag"
+                                        >
+                                            {{ snapshotName }}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="project-library__actions">
+                                    <button
+                                        class="ghost"
+                                        @click="openPublishedOperationLogDetail(log.id)"
+                                    >
+                                        查看详情
+                                    </button>
+                                    <button
+                                        class="ghost danger"
+                                        @click="deletePublishedOperationLog(log.id)"
+                                    >
+                                        删除日志
+                                    </button>
+                                </div>
+                            </article>
+                            <p
+                                v-if="!filteredProjectPublishedOperationLogs.length"
+                                class="project-library__empty"
+                            >
+                                没有匹配的操作日志，调整搜索词或筛选条件后再试试。
+                            </p>
+                        </div>
+                    </div>
+
+                    <p
+                        v-if="!currentProjectPublishedSnapshots.length"
+                        class="inspector-tip"
+                    >
                         当前项目还没有发布快照，先生成一个版本即可。
                     </p>
                 </template>
@@ -6775,6 +14618,94 @@ onBeforeUnmount(() => {
                     </div>
                 </template>
 
+                <template v-else-if="dialogMode === 'published-operation-detail'">
+                    <div class="dialog-card__header">
+                        <div>
+                            <p>操作日志详情</p>
+                            <h3>
+                                {{
+                                    activePublishedOperationLog?.summary ||
+                                    "当前日志已不存在"
+                                }}
+                            </h3>
+                        </div>
+                        <div class="dialog-card__actions">
+                            <button
+                                class="ghost"
+                                @click="returnToPublishManagerDialog"
+                            >
+                                返回发布中心
+                            </button>
+                            <button class="ghost" @click="closeDialog">关闭</button>
+                        </div>
+                    </div>
+
+                    <template v-if="activePublishedOperationLog">
+                        <div class="dialog-card__summary">
+                            <span>操作类型</span>
+                            <strong>
+                                {{ activePublishedOperationLog.actionLabel }}
+                            </strong>
+                            <span>
+                                {{
+                                    new Date(
+                                        activePublishedOperationLog.createdAt,
+                                    ).toLocaleString("zh-CN", {
+                                        hour12: false,
+                                    })
+                                }}
+                            </span>
+                            <span>
+                                {{ activePublishedOperationLog.projectName }}
+                            </span>
+                        </div>
+
+                        <div
+                            v-if="activePublishedOperationLog.detail"
+                            class="dialog-card__summary"
+                        >
+                            <span>操作说明</span>
+                            <strong>{{ activePublishedOperationLog.detail }}</strong>
+                        </div>
+
+                        <div
+                            v-if="activePublishedOperationLog.snapshotNames.length"
+                            class="dialog-card__summary"
+                        >
+                            <span>关联版本</span>
+                            <div class="project-library__tag-list">
+                                <span
+                                    v-for="snapshotName in activePublishedOperationLog.snapshotNames"
+                                    :key="`detail-${activePublishedOperationLog.id}-${snapshotName}`"
+                                    class="project-library__tag"
+                                >
+                                    {{ snapshotName }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <textarea
+                            :value="activePublishedOperationLogDetailText"
+                            class="dialog-card__textarea dialog-card__textarea--compact"
+                            readonly
+                            spellcheck="false"
+                        />
+
+                        <div class="dialog-card__actions">
+                            <button
+                                class="primary"
+                                @click="copyActivePublishedOperationLogDetail"
+                            >
+                                复制日志 JSON
+                            </button>
+                        </div>
+                    </template>
+
+                    <p v-else class="inspector-tip">
+                        这条日志已被删除或不再可用，可以返回发布中心查看其他记录。
+                    </p>
+                </template>
+
                 <template
                     v-else-if="
                         dialogMode === 'source-export' ||
@@ -6819,6 +14750,10 @@ onBeforeUnmount(() => {
                         </div>
                         <button class="ghost" @click="closeDialog">关闭</button>
                     </div>
+
+                    <p v-if="getJsonDialogHintText()" class="inspector-tip">
+                        {{ getJsonDialogHintText() }}
+                    </p>
 
                     <textarea
                         v-model="dialogText"

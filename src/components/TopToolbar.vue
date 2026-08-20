@@ -68,6 +68,7 @@ defineEmits([
     "toggle-preview",
     "open-runtime",
     "copy-runtime-link",
+    "open-asset-library",
     "open-publish-manager",
     "open-project-manager",
     "save-project-copy",
@@ -244,6 +245,12 @@ const pageCountLabel = computed(() => `${props.pages.length} 个页面`);
                 <div
                     class="toolbar__action-group toolbar__action-group--utility"
                 >
+                    <button
+                        class="ghost"
+                        @click="$emit('open-asset-library')"
+                    >
+                        资源中心
+                    </button>
                     <button
                         class="ghost"
                         @click="$emit('open-publish-manager')"
